@@ -879,9 +879,62 @@ def _run_frontend_server(
             raise HTTPException(status_code=401, detail="Studio identity is required")
         return principal.owner_id
 
+    def _openclaw_tool_resolver() -> str:
+        """Run only after a user confirms OpenClaw launch in the Chat page."""
+        from veadk.cli.studio_sandbox_tools import (
+            ensure_studio_openclaw_tool,
+            studio_sandbox_tool_name,
+        )
+
+        application_name = (
+            os.getenv("VEADK_STUDIO_APP_NAME")
+            or os.getenv("VEADK_STUDIO_APPLICATION_NAME")
+            or "veadk-studio"
+        )
+        common = {
+            "name": studio_sandbox_tool_name(application_name, "openclaw"),
+            "image_url": "temp-cr-images-cn-beijing.cr.volces.com/aiosandbox/arkclaw-omni:202607240107",
+            "client": _sandbox_client(),
+        }
+        try:
+            # The normal path: find an existing tagged/named ArkClaw Tool and
+            # return it without fetching model credentials or mutating it.
+            return ensure_studio_openclaw_tool(
+                **common,
+                model_api_key="",
+                model_name="",
+                model_base_url="",
+            )
+        except ValueError as error:
+            if "Missing OpenClaw Tool configuration" not in str(error):
+                raise
+
+        # No reusable Tool exists. This branch is reached only because the user
+        # explicitly requested OpenClaw; now resolve credentials and create it.
+        from veadk.auth.veauth.ark_veauth import get_ark_token
+
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        return ensure_studio_openclaw_tool(
+            **common,
+            model_api_key=get_ark_token(
+                region=os.getenv("AGENTKIT_SANDBOX_REGION", "cn-beijing"),
+                access_key=access_key,
+                secret_key=secret_key,
+                session_token=session_token,
+            ),
+            model_name=os.getenv("MODEL_AGENT_NAME") or "doubao-seed-evolving",
+            model_base_url=(
+                os.getenv("MODEL_AGENT_BASE_URL")
+                or "https://ark.cn-beijing.volces.com/api/v3"
+            ),
+        )
+
     mount_sandbox_routes(
         app,
-        SandboxConversationService(AgentkitSandboxGateway(_sandbox_client)),
+        SandboxConversationService(
+            AgentkitSandboxGateway(_sandbox_client),
+            openclaw_tool_resolver=_openclaw_tool_resolver,
+        ),
         _sandbox_owner,
     )
 
@@ -3166,13 +3219,14 @@ def _run_frontend_server(
                 f"OAuth2 SSO enabled (provider={provider_id}, redirect_uri={redirect_uri})"
             )
         else:
-            from fastapi.responses import JSONResponse
+            from fastapi.responses import Response
 
             @app.get("/oauth2/userinfo")
             async def _userinfo_no_sso():
-                # No SSO configured: report unauthenticated (401) so the SPA's auth
-                # check resolves cleanly instead of parsing the HTML shell as JSON.
-                return JSONResponse({"status": "unauthenticated"}, status_code=401)
+                # No SSO configured: return 404 so the SPA falls back to the
+                # legacy local-username flow (X-VeADK-Local-User header) instead
+                # of showing a login page with no providers.
+                return Response(status_code=404)
 
         @app.get("/web/auth-config")
         async def _web_auth_config():
@@ -3608,6 +3662,14 @@ def _resolve_studio_identity_region(
     help="Dedicated ready AgentKit CodeEnv Tool ID used by Skill creation mode. "
     "Default: create one during deployment.",
 )
+@click.option(
+    "--sandbox-openclaw-tool-id",
+    "sandbox_openclaw_tool_id",
+    default=None,
+    envvar="SANDBOX_OPENCLAW_TOOL",
+    help="Reusable AgentKit OpenClaw Tool ID. Default: reuse by tag/name or "
+    "create one from the configured OpenClaw image during deployment.",
+)
 def frontend_deploy(
     user_pool_id: str,
     allowed_client_id: str,
@@ -3629,6 +3691,7 @@ def frontend_deploy(
     studio_developers: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
+    sandbox_openclaw_tool_id: str | None,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
@@ -3758,6 +3821,16 @@ def frontend_deploy(
             ) from error
         click.echo(f"AgentKit {purpose} model credential relay is ready.")
 
+    if sandbox_openclaw_tool_id:
+        click.echo(
+            f"Using configured AgentKit OpenClaw Tool: {sandbox_openclaw_tool_id}"
+        )
+    else:
+        click.echo(
+            "OpenClaw Tool provisioning is deferred until a user explicitly "
+            "launches OpenClaw from the Studio Chat page."
+        )
+
     chat_codex_tool_id = sandbox_tool_ids["chat"]
     skill_creator_tool_id = sandbox_tool_ids["skill"]
     if not chat_codex_tool_id or not skill_creator_tool_id:
@@ -3788,6 +3861,9 @@ def frontend_deploy(
         veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
+    if sandbox_openclaw_tool_id:
+        veadk_environments["SANDBOX_OPENCLAW_TOOL"] = sandbox_openclaw_tool_id
+    veadk_environments["VEADK_STUDIO_APPLICATION_NAME"] = vefaas_app_name
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
 
@@ -3956,6 +4032,12 @@ def frontend_deploy(
     default=None,
     help="Replace the Skill Creator AgentKit CodeEnv Tool ID.",
 )
+@click.option(
+    "--sandbox-openclaw-tool-id",
+    "sandbox_openclaw_tool_id",
+    default=None,
+    help="Replace the reusable OpenClaw AgentKit Tool ID.",
+)
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
 def frontend_update(
@@ -3967,6 +4049,7 @@ def frontend_update(
     site_title: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
+    sandbox_openclaw_tool_id: str | None,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
 ) -> None:
@@ -4069,6 +4152,10 @@ def frontend_update(
         if sandbox_skill_creator_tool_id is not None:
             environment_overrides["SANDBOX_SKILL_CREATOR"] = (
                 sandbox_skill_creator_tool_id
+            )
+        if sandbox_openclaw_tool_id is not None:
+            environment_overrides["SANDBOX_OPENCLAW_TOOL"] = (
+                sandbox_openclaw_tool_id
             )
         url = service.update_application_code_bundle(
             application_id=target.application_id,

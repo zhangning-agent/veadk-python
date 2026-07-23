@@ -85,8 +85,11 @@ import {
 } from "./adk/sandbox";
 import {
   getSandboxCapability,
+  getOpenClawCapability,
   getSkillCreatorCapability,
 } from "./adk/newChatCapabilities";
+import { openClawClient, type OpenClawSession } from "./adk/openclaw";
+import { OpenClawLifecycle, OpenClawWorkspace } from "./ui/OpenClawWorkspace";
 import {
   SandboxLaunchDialog,
   type SandboxLaunchState,
@@ -558,6 +561,8 @@ export default function App() {
   const [pendingTurns, setPendingTurns] = useState<Turn[]>([]);
   const [sandboxSession, setSandboxSession] =
     useState<SandboxSessionInfo | null>(null);
+  const [openClawSession, setOpenClawSession] =
+    useState<OpenClawSession | null>(null);
   const [sandboxTurns, setSandboxTurns] = useState<Turn[]>([]);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxLaunchOpen, setSandboxLaunchOpen] = useState(false);
@@ -595,6 +600,7 @@ export default function App() {
   const [newChatMode, setNewChatMode] = useState<NewChatMode>("agent");
   const [newChatCapabilities, setNewChatCapabilities] = useState<{
     temporaryEnabled?: boolean;
+    openclawEnabled?: boolean;
     skillCreateEnabled?: boolean;
   }>({});
   const [skillJob, setSkillJob] = useState<SkillCreationJob | null>(null);
@@ -897,12 +903,15 @@ export default function App() {
     let cancelled = false;
     void Promise.allSettled([
       getSandboxCapability(),
+      getOpenClawCapability(),
       getSkillCreatorCapability(),
-    ]).then(([sandboxResult, skillResult]) => {
+    ]).then(([sandboxResult, openClawResult, skillResult]) => {
       if (cancelled) return;
       setNewChatCapabilities({
         temporaryEnabled:
           sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
+        openclawEnabled:
+          openClawResult.status === "fulfilled" && openClawResult.value.enabled,
         skillCreateEnabled:
           skillResult.status === "fulfilled" && skillResult.value.enabled,
       });
@@ -992,27 +1001,6 @@ export default function App() {
         console.warn("[app] /web/runtime-config probe failed; workbench stays hidden:", error);
       });
   }, []);
-
-  function onUsername(name: string) {
-    setLocalUser(name);
-    // A completed login is a fresh entry into the app. Do not reveal a create
-    // or management view that was persisted before the login page appeared.
-    restoredRef.current = true;
-    defaultViewAppliedRef.current = false;
-    setAccess(null);
-    setCreateView(null);
-    setImportedDraft(null);
-    setSkillCenter(false);
-    setAddAgent(false);
-    setAddMenu(false);
-    setSearchView(false);
-    setManageAgents(false);
-    startNewChat();
-    setUserId(name);
-    setUserInfo({ name });
-    setLocalMode(true);
-    setAuthStatus("authenticated");
-  }
 
   function onLogout() {
     defaultViewAppliedRef.current = false;
@@ -1169,7 +1157,7 @@ export default function App() {
   }
 
   function openSandboxLaunch() {
-    if (sandboxSession) return;
+    if (sandboxSession || openClawSession) return;
     setError("");
     setSandboxLaunchError("");
     setSandboxLaunchState("confirm");
@@ -1182,7 +1170,11 @@ export default function App() {
     setSandboxLaunchOpen(false);
     setSandboxLaunchState("confirm");
     setSandboxLaunchError("");
-    if (!sandboxSession && newChatMode === "temporary") {
+    if (
+      !sandboxSession &&
+      !openClawSession &&
+      (newChatMode === "temporary" || newChatMode === "openclaw")
+    ) {
       setNewChatMode("agent");
     }
   }
@@ -1194,22 +1186,29 @@ export default function App() {
     setSandboxLaunchState("loading");
     setSandboxLaunchError("");
     try {
-      const nextSession = await sandboxClient.startSession({
-        signal: controller.signal,
-      });
+      const launchingOpenClaw = newChatMode === "openclaw";
+      const nextSession = launchingOpenClaw
+        ? await openClawClient.startSession(controller.signal)
+        : await sandboxClient.startSession({ signal: controller.signal });
       if (sandboxLaunchAbortRef.current !== controller) return;
       viewSidRef.current = "";
       setSessionId("");
       setPendingTurns([]);
       setInput("");
       setInvocation(emptyInvocation());
-      setNewChatMode("temporary");
+      setNewChatMode(launchingOpenClaw ? "openclaw" : "temporary");
       discardSkillCreation();
       setSkillCreating(false);
       discardDraftAttachments(attachments);
       setAttachments([]);
-      setSandboxTurns([]);
-      setSandboxSession(nextSession);
+      if (launchingOpenClaw) {
+        setSandboxSession(null);
+        setOpenClawSession(nextSession as OpenClawSession);
+      } else {
+        setSandboxTurns([]);
+        setOpenClawSession(null);
+        setSandboxSession(nextSession as SandboxSessionInfo);
+      }
       setCreateView(null);
       setSkillCenter(false);
       setAddAgent(false);
@@ -1246,6 +1245,18 @@ export default function App() {
     setSandboxSession(null);
     if (closingSession) {
       void sandboxClient
+        .closeSession(closingSession.id)
+        .catch((closeError) => setError(String(closeError)));
+    }
+  }
+
+  function exitOpenClawSession() {
+    const closingSession = openClawSession;
+    setOpenClawSession(null);
+    setNewChatMode("agent");
+    setError("");
+    if (closingSession) {
+      void openClawClient
         .closeSession(closingSession.id)
         .catch((closeError) => setError(String(closeError)));
     }
@@ -1324,6 +1335,7 @@ export default function App() {
   // keeps running and persisting — its writes are suppressed here by viewSidRef.
   function startNewChat() {
     exitSandboxSession();
+    exitOpenClawSession();
     setError("");
     setGreeting(pickGreeting());
     setNewChatMode("agent");
@@ -1361,6 +1373,7 @@ export default function App() {
 
   async function pickSession(id: string) {
     if (sandboxSession) exitSandboxSession();
+    if (openClawSession) exitOpenClawSession();
     if (id === sessionId) return;
     viewSidRef.current = id;
     setError("");
@@ -1681,7 +1694,7 @@ export default function App() {
     return <div className="boot" />; // resolving identity
   }
   if (authStatus === "unauthenticated") {
-    return <LoginPage branding={siteBranding} onUsername={onUsername} />;
+    return <LoginPage branding={siteBranding} />;
   }
   if (!access) {
     return <div className="boot" />;
@@ -1711,6 +1724,8 @@ export default function App() {
   // Selecting an agent (from the sidebar picker) starts a fresh chat; any
   // background stream keeps persisting to its own (old) session.
   const selectAgent = (id: string) => {
+    if (sandboxSession) exitSandboxSession();
+    if (openClawSession) exitOpenClawSession();
     setConnections(loadConnections());
     viewSidRef.current = "";
     setSessionId("");
@@ -1751,6 +1766,7 @@ export default function App() {
         }}
         onSearch={() => {
           if (sandboxSession) exitSandboxSession();
+          if (openClawSession) exitOpenClawSession();
           setCreateView(null);
           setSkillCenter(false);
           setAddAgent(false);
@@ -1765,6 +1781,7 @@ export default function App() {
             return;
           }
           if (sandboxSession) exitSandboxSession();
+          if (openClawSession) exitOpenClawSession();
           // "添加 Agent" — open the two-card chooser. Drop any selected session.
           viewSidRef.current = "";
           setSessionId("");
@@ -1779,6 +1796,7 @@ export default function App() {
         }}
         onSkillCenter={() => {
           if (sandboxSession) exitSandboxSession();
+          if (openClawSession) exitOpenClawSession();
           setCreateView(null);
           setAddAgent(false);
           setAddMenu(false);
@@ -1793,6 +1811,7 @@ export default function App() {
             return;
           }
           if (sandboxSession) exitSandboxSession();
+          if (openClawSession) exitOpenClawSession();
           viewSidRef.current = "";
           setCreateView(null);
           setSkillCenter(false);
@@ -1809,6 +1828,7 @@ export default function App() {
             return;
           }
           if (sandboxSession) exitSandboxSession();
+          if (openClawSession) exitOpenClawSession();
           viewSidRef.current = "";
           setSessionId("");
           setCreateView(null);
@@ -1953,13 +1973,15 @@ export default function App() {
                 canCreateAgents
               }
               temporaryEnabled={newChatCapabilities.temporaryEnabled}
+              openclawEnabled={newChatCapabilities.openclawEnabled}
               skillCreateEnabled={newChatCapabilities.skillCreateEnabled}
               onModeChange={(mode) => {
                 if (
                   (mode === "temporary" && !newChatCapabilities.temporaryEnabled) ||
+                  (mode === "openclaw" && !newChatCapabilities.openclawEnabled) ||
                   (mode === "skill-create" && !newChatCapabilities.skillCreateEnabled)
                 ) return;
-                if (mode === "temporary") {
+                if (mode === "temporary" || mode === "openclaw") {
                   setNewChatMode(mode);
                   openSandboxLaunch();
                   return;
@@ -2029,13 +2051,18 @@ export default function App() {
                       ]
               }
               rightContent={
-                <DeploymentTaskStatus
-                  tasks={canCreateAgents ? deploymentTasks : []}
-                  onCancel={cancelDeploymentTask}
-                />
+                <>
+                  {openClawSession ? (
+                    <OpenClawLifecycle session={openClawSession} />
+                  ) : null}
+                  <DeploymentTaskStatus
+                    tasks={canCreateAgents ? deploymentTasks : []}
+                    onCancel={cancelDeploymentTask}
+                  />
+                </>
               }
             />
-            <main className={`main${sandboxSession ? " is-sandbox-session" : ""}`}>
+            <main className={`main${sandboxSession ? " is-sandbox-session" : ""}${openClawSession ? " is-openclaw-session" : ""}`}>
             {error && <div className="error">{error}</div>}
             {loadingSession && (
               <div className="session-loading">
@@ -2043,7 +2070,9 @@ export default function App() {
               </div>
             )}
 
-            {showManageAgents ? (
+            {openClawSession ? (
+              <OpenClawWorkspace session={openClawSession} onExit={startNewChat} />
+            ) : showManageAgents ? (
               <ManageAgentsView
                 currentRuntimeId={currentRuntime?.runtimeId}
                 onConnect={connectManagedRuntime}
@@ -2277,6 +2306,7 @@ export default function App() {
         open={sandboxLaunchOpen}
         state={sandboxLaunchState}
         error={sandboxLaunchError}
+        variant={newChatMode === "openclaw" ? "openclaw" : "temporary"}
         onCancel={cancelSandboxLaunch}
         onConfirm={() => void launchSandboxSession()}
       />

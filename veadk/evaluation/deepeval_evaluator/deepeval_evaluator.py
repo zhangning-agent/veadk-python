@@ -120,7 +120,7 @@ class DeepevalEvaluator(BaseEvaluator):
         if not judge_model_name:
             judge_model_name = getenv(
                 "MODEL_JUDGE_NAME",
-                "doubao-seed-1-6-250615",
+                "doubao-seed-evolving",
             )
         if not judge_model_api_base:
             judge_model_api_base = getenv(

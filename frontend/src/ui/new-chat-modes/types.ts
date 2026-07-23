@@ -1,1 +1,1 @@
-export type NewChatMode = "agent" | "temporary" | "skill-create";
+export type NewChatMode = "agent" | "temporary" | "openclaw" | "skill-create";

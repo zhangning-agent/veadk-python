@@ -62,6 +62,7 @@ export interface ComposerProps {
   showModeSelector?: boolean;
   onModeChange?: (value: NewChatMode) => void;
   temporaryEnabled?: boolean;
+  openclawEnabled?: boolean;
   skillCreateEnabled?: boolean;
 }
 
@@ -90,6 +91,7 @@ export function Composer({
   showModeSelector = false,
   onModeChange,
   temporaryEnabled,
+  openclawEnabled,
   skillCreateEnabled,
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -385,6 +387,7 @@ export function Composer({
             onChange={onModeChange}
             disabled={busy}
             temporaryEnabled={temporaryEnabled}
+            openclawEnabled={openclawEnabled}
             skillCreateEnabled={skillCreateEnabled}
           />
         ) : null}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, Github, LogIn } from "lucide-react";
+import { Github, LogIn } from "lucide-react";
 import type { SiteBranding } from "../adk/client";
-import { fetchProviders, loginTo, USERNAME_RE, type Provider } from "../adk/identity";
+import { fetchProviders, loginTo, type Provider } from "../adk/identity";
 import defaultSiteLogo from "../assets/volcengine.svg";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 
@@ -12,15 +12,12 @@ function providerIcon(id: string) {
 
 export interface LoginPageProps {
   branding: SiteBranding;
-  /** Chosen username for the no-SSO local mode. */
-  onUsername: (name: string) => void;
 }
 
-export function LoginPage({ branding, onUsername }: LoginPageProps) {
+export function LoginPage({ branding }: LoginPageProps) {
   const [providers, setProviders] = useState<Provider[] | null>(null);
   const [providerError, setProviderError] = useState("");
   const [providerAttempt, setProviderAttempt] = useState(0);
-  const [name, setName] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -39,11 +36,6 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
       active = false;
     };
   }, [providerAttempt]);
-
-  const valid = USERNAME_RE.test(name);
-  const submit = () => {
-    if (valid) onUsername(name);
-  };
 
   return (
     <div className="login">
@@ -74,50 +66,26 @@ export function LoginPage({ branding, onUsername }: LoginPageProps) {
                 重试
               </button>
             </div>
-          ) : providers === null ? null : providers.length > 0 ? (
+          ) : providers === null ? null : (
             <>
               <p className="login-sub">登录以继续使用</p>
               <div className="login-providers">
-                {providers.map((p) => (
+                {(providers.length > 0
+                  ? providers
+                  : [
+                      {
+                        id: "volcengine-identity",
+                        label: "火山引擎 Identity",
+                        loginUrl: "/oauth2/login",
+                      },
+                    ]
+                ).map((p) => (
                   <button key={p.id} className="login-btn" onClick={() => loginTo(p.loginUrl)}>
                     {providerIcon(p.id)}
                     <span>使用 {p.label} 登录</span>
                   </button>
                 ))}
               </div>
-            </>
-          ) : (
-            <>
-              <p className="login-sub">输入一个用户名即可开始</p>
-              <form
-                className="login-name"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  submit();
-                }}
-              >
-                <input
-                  className="login-name-input"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="用户名（字母 + 数字，最多 16 位）"
-                  maxLength={16}
-                  autoFocus
-                />
-                <button
-                  type="submit"
-                  className="login-name-go"
-                  disabled={!valid}
-                  aria-label="进入"
-                >
-                  <ArrowRight className="icon" />
-                </button>
-              </form>
-              {/* Always rendered so the error appearing doesn't shift the input;
-                  the line's height is reserved via CSS min-height. */}
-              <p className="login-hint" aria-live="polite">
-                {name && !valid ? "只能包含大小写字母和数字，最多 16 位。" : ""}
-              </p>
             </>
           )}
 

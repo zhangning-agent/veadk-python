@@ -59,7 +59,7 @@ class ExporterOption:
 ARK = "https://ark.cn-beijing.volces.com/api/v3/"
 
 MODEL_ENV = (
-    EnvVar("MODEL_AGENT_NAME", False, "doubao-seed-1-6-250615", "模型名称"),
+    EnvVar("MODEL_AGENT_NAME", False, "doubao-seed-evolving", "模型名称"),
     EnvVar("MODEL_AGENT_PROVIDER", False, "openai"),
     EnvVar("MODEL_AGENT_API_BASE", False, ARK),
 )

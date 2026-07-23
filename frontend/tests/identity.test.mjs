@@ -59,19 +59,26 @@ test("identity 401 keeps SSO mode unauthenticated", async () => {
   assert.deepEqual(identity, { status: "unauthenticated", userId: "", local: false });
 });
 
-test("identity 404 enters legacy local mode", async () => {
+test("identity 404 enters Studio directly with the legacy default user", async () => {
+  const saved = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => saved.get(key) ?? null,
+    setItem: (key, value) => saved.set(key, value),
+  };
+  globalThis.sessionStorage = {
+    getItem: (key) => saved.get(`tab:${key}`) ?? null,
+    setItem: (key, value) => saved.set(`tab:${key}`, value),
+  };
   globalThis.fetch = async () => new Response("", { status: 404 });
   const identity = await resolveIdentity();
-  assert.deepEqual(identity, { status: "unauthenticated", userId: "", local: true });
-});
-
-test("identity 404 restores a saved local username", async () => {
-  globalThis.localStorage = { getItem: () => "alice" };
-  globalThis.fetch = async () => new Response("", { status: 404 });
-  const identity = await resolveIdentity();
-  assert.equal(identity.status, "authenticated");
-  assert.equal(identity.userId, "alice");
-  assert.equal(identity.local, true);
+  assert.deepEqual(identity, {
+    status: "authenticated",
+    userId: "web-user",
+    info: { name: "web-user" },
+    local: true,
+  });
+  assert.equal(saved.get("veadk_local_user"), "web-user");
+  assert.equal(saved.get("tab:veadk_local_user_tab"), "web-user");
 });
 
 test("local username is forwarded through the dedicated API header", () => {

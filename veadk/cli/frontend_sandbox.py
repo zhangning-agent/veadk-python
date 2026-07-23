@@ -25,6 +25,8 @@ import re
 import shlex
 import time
 import uuid
+import urllib.error
+import urllib.request
 
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
@@ -41,6 +43,7 @@ STUDIO_SANDBOX_TOOL_NAME = "veadk-studio-codex"
 STUDIO_SANDBOX_TTL_SECONDS = 3_600
 STUDIO_SANDBOX_MAX_ACTIVE = 20
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
+_SANDBOX_OPENCLAW_TOOL_ENV = "SANDBOX_OPENCLAW_TOOL"
 _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
 _SENSITIVE_PATTERN = re.compile(
@@ -163,6 +166,7 @@ class SandboxConversation:
     owner_id: str
     cloud: SandboxCloudSession
     thread_id: str | None = None
+    created_at: float = field(default_factory=time.time)
     expires_at: float = field(
         default_factory=lambda: time.monotonic() + STUDIO_SANDBOX_TTL_SECONDS
     )
@@ -203,6 +207,10 @@ class SandboxCloudGateway(Protocol):
         """Stream one turn from the coding agent inside the Sandbox."""
         if False:
             yield SandboxStreamEvent()
+
+    async def start_openclaw(self, session: SandboxCloudSession) -> str:
+        """Start OpenClaw and return a short-lived browser preview URL."""
+        raise NotImplementedError
 
     async def drain(self) -> None:
         """Wait for asynchronous cloud cleanup started by cancelled requests."""
@@ -379,6 +387,61 @@ class AgentkitSandboxGateway:
         scheme = "wss" if parsed.scheme == "https" else "ws"
         path = f"{parsed.path.rstrip('/')}/v1/shell/ws"
         return urlunsplit((scheme, parsed.netloc, path, parsed.query, ""))
+
+    @staticmethod
+    def _endpoint_url(endpoint: str, path: str) -> str:
+        parsed = urlsplit(endpoint)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise SandboxProvisioningError("AgentKit 沙箱返回了无效 Endpoint。")
+        prefix = parsed.path.rstrip("/")
+        return urlunsplit(
+            (parsed.scheme, parsed.netloc, f"{prefix}/{path.lstrip('/')}", parsed.query, "")
+        )
+
+    @staticmethod
+    def _json_request(
+        url: str,
+        *,
+        method: str = "GET",
+        payload: dict[str, object] | None = None,
+        timeout: float = 30,
+    ) -> object:
+        data = json.dumps(payload).encode() if payload is not None else None
+        request = urllib.request.Request(
+            url,
+            data=data,
+            method=method,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read()
+        return json.loads(body) if body else {}
+
+    async def start_openclaw(self, session: SandboxCloudSession) -> str:
+        """Wait for the dedicated OpenClaw image and return its direct endpoint."""
+        preview_url = self._endpoint_url(session.endpoint, "openclaw")
+        deadline = time.monotonic() + 180
+        last_error: object = "OpenClaw 尚未就绪"
+
+        def _probe() -> None:
+            request = urllib.request.Request(
+                preview_url, method="GET", headers={"Accept": "text/html"}
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                response.read(1)
+
+        while time.monotonic() < deadline:
+            try:
+                await asyncio.to_thread(_probe)
+                break
+            except (urllib.error.URLError, TimeoutError) as error:
+                last_error = error
+                await asyncio.sleep(3)
+        else:
+            raise SandboxProvisioningError(
+                f"OpenClaw 启动超时：{_safe_error_message(last_error)}"
+            )
+        return preview_url
 
     @staticmethod
     def _command(thread_id: str | None, input_marker: str, marker: str) -> str:
@@ -628,10 +691,17 @@ class SandboxConversationService:
     """Own temporary conversation lifecycle and per-user isolation."""
 
     def __init__(
-        self, gateway: SandboxCloudGateway, tool_id: str | None = None
+        self,
+        gateway: SandboxCloudGateway,
+        tool_id: str | None = None,
+        openclaw_tool_id: str | None = None,
+        openclaw_tool_resolver: Callable[[], str] | None = None,
     ) -> None:
         self._gateway = gateway
         self._configured_tool_id = (tool_id or "").strip()
+        self._configured_openclaw_tool_id = (openclaw_tool_id or "").strip()
+        self._openclaw_tool_resolver = openclaw_tool_resolver
+        self._openclaw_tool_lock = asyncio.Lock()
         self._sessions: dict[str, SandboxConversation] = {}
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
@@ -639,6 +709,14 @@ class SandboxConversationService:
     def capabilities(self) -> dict[str, object]:
         """Report whether the dedicated temporary-chat Tool is configured."""
         enabled = bool(self._tool_id(required=False))
+        return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
+
+    def openclaw_capabilities(self) -> dict[str, object]:
+        """Report whether OpenClaw can be resolved after an explicit user action."""
+        enabled = bool(
+            self._openclaw_tool_id(required=False)
+            or self._openclaw_tool_resolver is not None
+        )
         return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
 
     def _tool_id(self, *, required: bool = True) -> str:
@@ -649,6 +727,47 @@ class SandboxConversationService:
         if required and not tool_id:
             raise SandboxConfigurationError("管理员未配置")
         return tool_id
+
+    def _openclaw_tool_id(self, *, required: bool = True) -> str:
+        tool_id = (
+            self._configured_openclaw_tool_id
+            or (os.getenv(_SANDBOX_OPENCLAW_TOOL_ENV) or "").strip()
+        )
+        if required and not tool_id:
+            raise SandboxConfigurationError("管理员未配置")
+        return tool_id
+
+    async def _resolve_openclaw_tool_id(self) -> str:
+        """Resolve/reuse/create the Tool lazily after the user confirms launch."""
+        tool_id = self._openclaw_tool_id(required=False)
+        if tool_id:
+            return tool_id
+        if self._openclaw_tool_resolver is None:
+            raise SandboxConfigurationError("管理员未配置")
+
+        # A user can double-click launch or multiple users can launch at once.
+        # Resolve at most once per Studio process, then every request only creates
+        # an AgentKit Session from the cached reusable Tool.
+        async with self._openclaw_tool_lock:
+            tool_id = self._openclaw_tool_id(required=False)
+            if tool_id:
+                return tool_id
+            try:
+                resolved = await asyncio.to_thread(self._openclaw_tool_resolver)
+            except SandboxError:
+                raise
+            except Exception as error:
+                raise SandboxProvisioningError(
+                    "查找或创建 OpenClaw Tool 失败："
+                    f"{_safe_error_message(error)}"
+                ) from error
+            tool_id = (resolved or "").strip()
+            if not tool_id:
+                raise SandboxProvisioningError(
+                    "查找或创建 OpenClaw Tool 未返回 Tool ID。"
+                )
+            self._configured_openclaw_tool_id = tool_id
+            return tool_id
 
     async def start(self, owner_id: str) -> SandboxConversation:
         cloud: SandboxCloudSession | None = None
@@ -676,6 +795,47 @@ class SandboxConversationService:
         finally:
             async with self._registry_lock:
                 self._sessions_starting -= 1
+
+    async def start_openclaw(self, owner_id: str) -> tuple[SandboxConversation, str]:
+        """Resolve the reusable Tool on demand, then create one Session."""
+        cloud: SandboxCloudSession | None = None
+        tool_id = await self._resolve_openclaw_tool_id()
+        await self.cleanup_expired()
+        async with self._registry_lock:
+            if len(self._sessions) + self._sessions_starting >= (
+                STUDIO_SANDBOX_MAX_ACTIVE
+            ):
+                raise SandboxCapacityError("临时会话并发数已达上限，请稍后重试。")
+            self._sessions_starting += 1
+        try:
+            cloud = await self._gateway.create_session(tool_id)
+            session = SandboxConversation(
+                session_id=str(uuid.uuid4()),
+                owner_id=owner_id,
+                cloud=cloud,
+            )
+            self._sessions[session.session_id] = session
+            preview_url = await self._gateway.start_openclaw(session.cloud)
+        except BaseException:
+            if cloud is not None:
+                self._sessions.pop(
+                    next(
+                        (
+                            session_id
+                            for session_id, candidate in self._sessions.items()
+                            if candidate.cloud is cloud
+                        ),
+                        "",
+                    ),
+                    None,
+                )
+                with contextlib.suppress(SandboxError):
+                    await asyncio.shield(self._gateway.delete_session(cloud))
+            raise
+        finally:
+            async with self._registry_lock:
+                self._sessions_starting -= 1
+        return session, preview_url
 
     def _owned(self, session_id: str, owner_id: str) -> SandboxConversation:
         session = self._sessions.get(session_id)
@@ -775,6 +935,11 @@ def mount_sandbox_routes(
         owner_resolver(request)
         return service.capabilities()
 
+    @app.get("/web/openclaw/capabilities")
+    async def _openclaw_capabilities(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        return service.openclaw_capabilities()
+
     @app.post("/web/sandbox/sessions")
     async def _start_sandbox_session(request: Request) -> dict[str, str]:
         try:
@@ -785,6 +950,24 @@ def mount_sandbox_routes(
             "sessionId": session.session_id,
             "status": "ready",
             "toolName": STUDIO_SANDBOX_TOOL_NAME,
+        }
+
+    @app.post("/web/openclaw/sessions")
+    async def _start_openclaw_session(request: Request) -> dict[str, object]:
+        try:
+            session, preview_url = await service.start_openclaw(
+                owner_resolver(request)
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {
+            "sessionId": session.session_id,
+            "sandboxId": session.cloud.instance_id,
+            "status": "ready",
+            "previewUrl": preview_url,
+            "createdAt": session.created_at,
+            "expiresAt": session.created_at + STUDIO_SANDBOX_TTL_SECONDS,
+            "ttlSeconds": STUDIO_SANDBOX_TTL_SECONDS,
         }
 
     @app.post("/web/sandbox/sessions/{session_id}/messages")
@@ -850,6 +1033,16 @@ def mount_sandbox_routes(
 
     @app.delete("/web/sandbox/sessions/{session_id}")
     async def _delete_sandbox_session(
+        session_id: str, request: Request
+    ) -> dict[str, bool]:
+        try:
+            await service.close(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"deleted": True}
+
+    @app.delete("/web/openclaw/sessions/{session_id}")
+    async def _delete_openclaw_session(
         session_id: str, request: Request
     ) -> dict[str, bool]:
         try:

@@ -11,6 +11,7 @@ import { BOOT_REQUEST_TIMEOUT_MS, requestSignal } from "./timeout";
 
 const LOCAL_USER_KEY = "veadk_local_user";
 const TAB_LOCAL_USER_KEY = "veadk_local_user_tab";
+const DEFAULT_LOCAL_USER_ID = "web-user";
 
 export type AuthStatus = "authenticated" | "unauthenticated";
 
@@ -127,7 +128,7 @@ export function logout(): void {
 }
 
 /** Resolve identity. With SSO: via /oauth2/userinfo. Without SSO (endpoint 404):
- *  use a locally chosen username, or prompt for one on the login page.
+ *  enter Studio directly with the stable legacy user id.
  *
  *  Network and server failures reject instead of silently changing identity
  *  mode. The caller can then show a retryable error. */
@@ -164,12 +165,16 @@ export async function resolveIdentity(): Promise<Identity> {
     throw new Error(`身份服务异常（HTTP ${res.status}），请稍后重试。`);
   }
 
-  // Legacy server without the identity endpoint: local username mode.
-  const saved = getLocalUser();
-  if (saved) {
-    return { status: "authenticated", userId: saved, info: { name: saved }, local: true };
-  }
-  return { status: "unauthenticated", userId: "", local: true };
+  // Legacy server without the identity endpoint: keep the original direct-entry
+  // behaviour. Persist an ASCII-only id because it is forwarded in an HTTP
+  // header by withLocalUser().
+  setLocalUser(DEFAULT_LOCAL_USER_ID);
+  return {
+    status: "authenticated",
+    userId: DEFAULT_LOCAL_USER_ID,
+    info: { name: DEFAULT_LOCAL_USER_ID },
+    local: true,
+  };
 }
 
 /** A short display name for the signed-in user. */

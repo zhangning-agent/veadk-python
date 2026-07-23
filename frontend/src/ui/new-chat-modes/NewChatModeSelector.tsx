@@ -21,6 +21,11 @@ const MODES: ModeOption[] = [
     description: "在 AgentKit 沙箱中执行一次性任务",
   },
   {
+    value: "openclaw",
+    label: "OpenClaw",
+    description: "在独立沙箱中打开 OpenClaw",
+  },
+  {
     value: "skill-create",
     label: "创建 Skill",
     description: "使用两个模型生成并对比 Skill",
@@ -33,6 +38,7 @@ export interface NewChatModeSelectorProps {
   onChange: (value: NewChatMode) => void;
   disabled?: boolean;
   temporaryEnabled?: boolean;
+  openclawEnabled?: boolean;
   skillCreateEnabled?: boolean;
 }
 
@@ -45,13 +51,22 @@ function ModeIcon({ mode }: { mode: NewChatMode }) {
       </svg>
     );
   }
-  if (mode === "temporary") {
+  if (mode === "temporary" || mode === "openclaw") {
     return (
       <svg className="new-chat-mode__temporary-icon" viewBox="0 0 20 20" aria-hidden="true">
-        <path
-          d="M4.1 4.2h11.8v8.7H9l-3.5 2.8v-2.8H4.1z"
-          strokeDasharray="2.25 1.9"
-        />
+        {mode === "openclaw" ? (
+          <>
+            <path d="M4 7.5c1.8-3.4 4-4.5 6-4.5s4.2 1.1 6 4.5" />
+            <path d="M3.5 9.5c1.7 0 2.9.8 3.6 2.3M16.5 9.5c-1.7 0-2.9.8-3.6 2.3M7.1 11.8c.6 3 1.5 4.7 2.9 5.2 1.4-.5 2.3-2.2 2.9-5.2" />
+            <circle cx="7.2" cy="8.2" r=".8" />
+            <circle cx="12.8" cy="8.2" r=".8" />
+          </>
+        ) : (
+          <path
+            d="M4.1 4.2h11.8v8.7H9l-3.5 2.8v-2.8H4.1z"
+            strokeDasharray="2.25 1.9"
+          />
+        )}
       </svg>
     );
   }
@@ -64,6 +79,7 @@ export function NewChatModeSelector({
   onChange,
   disabled = false,
   temporaryEnabled,
+  openclawEnabled,
   skillCreateEnabled,
 }: NewChatModeSelectorProps) {
   const [open, setOpen] = useState(false);
@@ -76,6 +92,7 @@ export function NewChatModeSelector({
 
   function modeEnabled(mode: ModeOption): boolean | undefined {
     if (mode.value === "temporary") return temporaryEnabled;
+    if (mode.value === "openclaw") return openclawEnabled;
     if (mode.value === "skill-create") return skillCreateEnabled;
     return true;
   }

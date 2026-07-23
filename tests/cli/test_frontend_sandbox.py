@@ -90,10 +90,22 @@ class _FakeGateway:
     async def drain(self) -> None:
         return None
 
+    async def start_openclaw(self, session: SandboxCloudSession) -> str:
+        return "https://sandbox.example/absproxy/18789/?ticket=preview"
 
-def _app(gateway: _FakeGateway, tool_id: str | None = "tool-studio") -> FastAPI:
+
+def _app(
+    gateway: _FakeGateway,
+    tool_id: str | None = "tool-studio",
+    openclaw_tool_resolver=None,
+) -> FastAPI:
     app = FastAPI()
-    service = SandboxConversationService(gateway, tool_id=tool_id)
+    service = SandboxConversationService(
+        gateway,
+        tool_id=tool_id,
+        openclaw_tool_id=tool_id,
+        openclaw_tool_resolver=openclaw_tool_resolver,
+    )
 
     def _owner(request: Request) -> str:
         owner = request.headers.get("X-Test-User", "")
@@ -145,6 +157,17 @@ def test_sandbox_routes_start_stream_and_delete_without_exposing_endpoint() -> N
     assert gateway.tool_ids == ["tool-studio"]
 
 
+def test_openclaw_endpoint_uses_the_image_proxy_path() -> None:
+    endpoint = (
+        "https://sandbox.example/?faasInstanceName=instance&Authorization=secret"
+    )
+
+    assert AgentkitSandboxGateway._endpoint_url(endpoint, "openclaw") == (
+        "https://sandbox.example/openclaw"
+        "?faasInstanceName=instance&Authorization=secret"
+    )
+
+
 def test_sandbox_capabilities_report_configured_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -156,6 +179,70 @@ def test_sandbox_capabilities_report_configured_tool(
 
     assert response.status_code == 200
     assert response.json() == {"enabled": True, "reason": ""}
+
+
+def test_openclaw_routes_create_report_lifecycle_and_delete() -> None:
+    gateway = _FakeGateway()
+    app = _app(gateway)
+    with TestClient(app) as client:
+        created = client.post(
+            "/web/openclaw/sessions", headers={"X-Test-User": "alice"}
+        )
+        assert created.status_code == 200
+        payload = created.json()
+        assert payload["status"] == "ready"
+        assert payload["sandboxId"] == "remote-1"
+        assert payload["previewUrl"].endswith("?ticket=preview")
+        assert payload["expiresAt"] - payload["createdAt"] == 3600
+        assert payload["ttlSeconds"] == 3600
+
+        deleted = client.delete(
+            f"/web/openclaw/sessions/{payload['sessionId']}",
+            headers={"X-Test-User": "alice"},
+        )
+        assert deleted.status_code == 200
+        assert deleted.json() == {"deleted": True}
+
+
+def test_openclaw_tool_is_resolved_only_after_user_starts_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SANDBOX_OPENCLAW_TOOL", raising=False)
+    resolved = 0
+
+    def _resolve() -> str:
+        nonlocal resolved
+        resolved += 1
+        return "tool-resolved-on-click"
+
+    gateway = _FakeGateway()
+    with TestClient(
+        _app(gateway, tool_id=None, openclaw_tool_resolver=_resolve)
+    ) as client:
+        capability = client.get(
+            "/web/openclaw/capabilities",
+            headers={"X-Test-User": "alice"},
+        )
+        assert capability.json() == {"enabled": True, "reason": ""}
+        assert resolved == 0
+        assert gateway.created == 0
+
+        first = client.post(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        second = client.post(
+            "/web/openclaw/sessions",
+            headers={"X-Test-User": "bob"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert resolved == 1
+    assert gateway.tool_ids == [
+        "tool-resolved-on-click",
+        "tool-resolved-on-click",
+    ]
 
 
 def test_sandbox_capabilities_report_admin_not_configured(
