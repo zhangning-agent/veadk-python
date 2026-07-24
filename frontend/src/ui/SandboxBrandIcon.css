@@ -1,0 +1,12 @@
+.sandbox-brand-icon {
+  display: block;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.sandbox-brand-icon--hermes {
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+}

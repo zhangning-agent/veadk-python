@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Official Hermes favicon mark, placed on its app-icon background:
+       https://github.com/NousResearch/hermes-agent/blob/main/website/static/img/favicon.svg -->
+  <rect width="100" height="100" rx="22" fill="#fff"/>
+  <text x="50" y="84" fill="#050505" font-family="Georgia, 'Times New Roman', serif" font-size="92" text-anchor="middle">⚕</text>
+</svg>

@@ -52,6 +52,8 @@
 
 .new-chat-mode__icon svg { width: 15px; height: 15px; }
 .new-chat-mode__option-icon svg { width: 18px; height: 18px; }
+.new-chat-mode__icon .sandbox-brand-icon { width: 17px; height: 17px; }
+.new-chat-mode__option-icon .sandbox-brand-icon { width: 20px; height: 20px; }
 .new-chat-mode svg {
   fill: none;
   stroke: currentColor;
@@ -97,6 +99,7 @@
 }
 
 .new-chat-mode__option.is-active { background: hsl(var(--accent)); }
+.new-chat-mode__option.is-selected { background: hsl(var(--accent) / .72); }
 .new-chat-mode__option:disabled { cursor: not-allowed; opacity: 0.48; }
 .new-chat-mode__copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .new-chat-mode__copy > span:last-child { color: hsl(var(--muted-foreground)); font-size: 11px; line-height: 1.35; }
@@ -111,8 +114,49 @@
   line-height: 1.2;
 }
 .new-chat-mode__check { width: 16px; height: 16px; color: hsl(var(--primary)); }
+.new-chat-mode__sandbox-menu { position: relative; }
+.new-chat-mode__sandbox-parent[aria-expanded="true"] {
+  background: hsl(var(--accent));
+}
+.new-chat-mode__sandbox-stack {
+  position: relative;
+  width: 24px;
+  height: 22px;
+}
+.new-chat-mode__sandbox-stack .sandbox-brand-icon {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+}
+.new-chat-mode__sandbox-stack .sandbox-brand-icon:first-child {
+  top: 0;
+  left: 0;
+}
+.new-chat-mode__sandbox-stack .sandbox-brand-icon:last-child {
+  right: 0;
+  bottom: 0;
+  background: hsl(var(--background));
+}
+.new-chat-mode__submenu-chevron {
+  width: 14px;
+  height: 14px;
+  transition: transform 140ms ease;
+}
+.new-chat-mode__sandbox-parent[aria-expanded="true"] .new-chat-mode__submenu-chevron {
+  transform: rotate(90deg);
+}
+.new-chat-mode__submenu {
+  margin: 2px 0 4px 17px;
+  padding-left: 7px;
+  border-left: 1px solid hsl(var(--border));
+}
+.new-chat-mode__submenu-option {
+  grid-template-columns: 24px minmax(0, 1fr) 18px;
+  padding-block: 8px;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .new-chat-mode__trigger,
-  .new-chat-mode__chevron { transition: none; }
+  .new-chat-mode__chevron,
+  .new-chat-mode__submenu-chevron { transition: none; }
 }

@@ -1,8 +1,8 @@
 import { ExternalLink, Globe2, Loader2, Maximize2, Minus, Terminal, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { OpenClawSession } from "../adk/openclaw";
+import type { HermesSession } from "../adk/hermes";
 import { SandboxBrandIcon } from "./SandboxBrandIcon";
-import "./OpenClawWorkspace.css";
+import "./HermesWorkspace.css";
 
 function duration(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
@@ -12,12 +12,12 @@ function duration(seconds: number): string {
   return `${hours ? `${hours}小时 ` : ""}${minutes}分 ${secs.toString().padStart(2, "0")}秒`;
 }
 
-export function OpenClawLifecycle({
+export function HermesLifecycle({
   session,
   minimized,
   onOpen,
 }: {
-  session: OpenClawSession;
+  session: HermesSession;
   minimized: boolean;
   onOpen: () => void;
 }) {
@@ -28,23 +28,23 @@ export function OpenClawLifecycle({
   }, []);
   const remaining = Math.max(0, session.expiresAt - now);
   return (
-    <div className="openclaw-lifecycle" aria-label="OpenClaw 沙箱生命周期">
-      <span className={`openclaw-lifecycle__dot${remaining <= 0 ? " is-expired" : ""}`} />
+    <div className="hermes-lifecycle" aria-label="Hermes 沙箱生命周期">
+      <span className={`hermes-lifecycle__dot${remaining <= 0 ? " is-expired" : ""}`} />
       <span>{remaining > 0 ? `剩余 ${duration(remaining)}` : "已过期"}</span>
-      <span className="openclaw-lifecycle__divider" />
-      <span className="openclaw-lifecycle__brand">
+      <span className="hermes-lifecycle__divider" />
+      <span className="hermes-lifecycle__brand">
         <SandboxBrandIcon
-          brand="openclaw"
-          className="openclaw-lifecycle__brand-icon"
+          brand="hermes"
+          className="hermes-lifecycle__brand-icon"
         />
-        <span>OpenClaw</span>
+        <span>Hermes</span>
       </span>
       {minimized ? (
         <button
           type="button"
-          className="openclaw-lifecycle__open"
-          title="打开 OpenClaw"
-          aria-label="打开 OpenClaw"
+          className="hermes-lifecycle__open"
+          title="打开 Hermes"
+          aria-label="打开 Hermes"
           onClick={onOpen}
         >
           <Maximize2 size={13} />
@@ -55,12 +55,12 @@ export function OpenClawLifecycle({
   );
 }
 
-export function OpenClawWorkspace({
+export function HermesWorkspace({
   session,
   onMinimize,
   onExit,
 }: {
-  session: OpenClawSession;
+  session: HermesSession;
   onMinimize: () => void;
   onExit: () => void;
 }) {
@@ -73,17 +73,17 @@ export function OpenClawWorkspace({
     setView(nextView);
   }
   return (
-    <section className="openclaw-workspace">
-      <header className="openclaw-workspace__header">
-        <div className="openclaw-workspace__identity">
-          <SandboxBrandIcon brand="openclaw" />
-          <span className="openclaw-workspace__brand">OpenClaw</span>
-          <span className="openclaw-workspace__sandbox">
+    <section className="hermes-workspace">
+      <header className="hermes-workspace__header">
+        <div className="hermes-workspace__identity">
+          <SandboxBrandIcon brand="hermes" />
+          <span className="hermes-workspace__brand">Hermes</span>
+          <span className="hermes-workspace__sandbox">
             {view === "webui" ? "WebUI" : "Terminal"}
           </span>
         </div>
-        <div className="openclaw-workspace__controls">
-          <div className="openclaw-workspace__views" role="tablist" aria-label="OpenClaw 视图">
+        <div className="hermes-workspace__controls">
+          <div className="hermes-workspace__views" role="tablist" aria-label="Hermes 视图">
             <button
               type="button"
               role="tab"
@@ -103,15 +103,15 @@ export function OpenClawWorkspace({
               Terminal
             </button>
           </div>
-          <div className="openclaw-workspace__actions">
+          <div className="hermes-workspace__actions">
             <a href={activeUrl} target="_blank" rel="noreferrer" title="在新窗口打开">
               <ExternalLink size={15} />
             </a>
             <button
               type="button"
               onClick={onMinimize}
-              title="最小化 OpenClaw"
-              aria-label="最小化 OpenClaw"
+              title="最小化 Hermes"
+              aria-label="最小化 Hermes"
             >
               <Minus size={17} />
             </button>
@@ -122,13 +122,13 @@ export function OpenClawWorkspace({
         </div>
       </header>
       {!loaded ? (
-        <div className="openclaw-workspace__loading">
+        <div className="hermes-workspace__loading">
           <Loader2 className="spin" />
-          正在载入 {view === "webui" ? "OpenClaw WebUI" : "Terminal"}…
+          正在载入 {view === "webui" ? "Hermes WebUI" : "Terminal"}…
         </div>
       ) : null}
       <iframe
-        title={view === "webui" ? "OpenClaw WebUI" : "OpenClaw Terminal"}
+        title={view === "webui" ? "Hermes WebUI" : "Hermes Terminal"}
         src={activeUrl}
         allow="clipboard-read; clipboard-write"
         onLoad={() => setLoaded(true)}

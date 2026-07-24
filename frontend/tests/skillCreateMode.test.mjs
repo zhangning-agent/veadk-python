@@ -44,7 +44,7 @@ test("offers Agent, temporary Sandbox, and Skill creation modes in the new-chat 
   assert.match(composerSource, /<NewChatModeSelector/);
   assert.match(composerSource, /SKILL_MODELS\.join\(" 和 "\)/);
   assert.match(composerSource, /描述你想创建的 Skill.*并行创建/);
-  assert.match(appSource, /mode === "temporary"[\s\S]*?openSandboxLaunch\(\)/);
+  assert.match(appSource, /mode === "temporary"[\s\S]*?openSandboxLaunch\(mode\)/);
 });
 
 test("preserves the existing Agent submit flow and resets mode on a new chat", () => {

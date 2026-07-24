@@ -916,15 +916,69 @@ def _run_frontend_server(
         access_key, secret_key, session_token = _resolve_ve_credentials()
         return ensure_studio_openclaw_tool(
             **common,
-            model_api_key=get_ark_token(
-                region=os.getenv("AGENTKIT_SANDBOX_REGION", "cn-beijing"),
-                access_key=access_key,
-                secret_key=secret_key,
-                session_token=session_token,
+            model_api_key=(
+                os.getenv("MODEL_AGENT_API_KEY")
+                or get_ark_token(
+                    region=os.getenv("AGENTKIT_SANDBOX_REGION", "cn-beijing"),
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    session_token=session_token,
+                )
             ),
             model_name=os.getenv("MODEL_AGENT_NAME") or "doubao-seed-evolving",
             model_base_url=(
-                os.getenv("MODEL_AGENT_BASE_URL")
+                os.getenv("ARK_BASE_URL")
+                or os.getenv("MODEL_AGENT_BASE_URL")
+                or "https://ark.cn-beijing.volces.com/api/v3"
+            ),
+        )
+
+    def _hermes_tool_resolver() -> str:
+        """Run only after a user confirms Hermes launch in the Chat page."""
+        from veadk.cli.studio_sandbox_tools import (
+            ensure_studio_hermes_tool,
+            studio_sandbox_tool_name,
+        )
+
+        application_name = (
+            os.getenv("VEADK_STUDIO_APP_NAME")
+            or os.getenv("VEADK_STUDIO_APPLICATION_NAME")
+            or "veadk-studio"
+        )
+        common = {
+            "name": studio_sandbox_tool_name(application_name, "hermes"),
+            "image_url": "temp-cr-images-cn-beijing.cr.volces.com/aiosandbox/arkclaw-omni:hermes-202607171711",
+            "client": _sandbox_client(),
+        }
+        try:
+            return ensure_studio_hermes_tool(
+                **common,
+                model_api_key="",
+                model_name="",
+                model_base_url="",
+            )
+        except ValueError as error:
+            if "Missing Hermes Tool configuration" not in str(error):
+                raise
+
+        from veadk.auth.veauth.ark_veauth import get_ark_token
+
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        return ensure_studio_hermes_tool(
+            **common,
+            model_api_key=(
+                os.getenv("MODEL_AGENT_API_KEY")
+                or get_ark_token(
+                    region=os.getenv("AGENTKIT_SANDBOX_REGION", "cn-beijing"),
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    session_token=session_token,
+                )
+            ),
+            model_name=os.getenv("MODEL_AGENT_NAME") or "doubao-seed-evolving",
+            model_base_url=(
+                os.getenv("ARK_BASE_URL")
+                or os.getenv("MODEL_AGENT_BASE_URL")
                 or "https://ark.cn-beijing.volces.com/api/v3"
             ),
         )
@@ -934,6 +988,7 @@ def _run_frontend_server(
         SandboxConversationService(
             AgentkitSandboxGateway(_sandbox_client),
             openclaw_tool_resolver=_openclaw_tool_resolver,
+            hermes_tool_resolver=_hermes_tool_resolver,
         ),
         _sandbox_owner,
     )

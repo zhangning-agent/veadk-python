@@ -10,7 +10,7 @@ export interface SandboxLaunchDialogProps {
   error?: string;
   onCancel: () => void;
   onConfirm: () => void;
-  variant?: "temporary" | "openclaw";
+  variant?: "temporary" | "openclaw" | "hermes";
 }
 
 export function SandboxLaunchDialog({
@@ -60,11 +60,21 @@ export function SandboxLaunchDialog({
   if (!open) return null;
 
   const loading = state === "loading";
+  const brandLabel =
+    variant === "openclaw"
+      ? "OpenClaw"
+      : variant === "hermes"
+      ? "Hermes"
+      : null;
   const title = loading
-    ? variant === "openclaw" ? "正在启动 OpenClaw" : "正在初始化沙箱"
+    ? brandLabel
+      ? `正在启动 ${brandLabel}`
+      : "正在初始化沙箱"
     : state === "error"
       ? "启动失败"
-      : variant === "openclaw" ? "创建 OpenClaw 沙箱" : "启用临时会话";
+      : brandLabel
+      ? `创建 ${brandLabel} 沙箱`
+      : "启用临时会话";
 
   return createPortal(
     <div
@@ -95,14 +105,14 @@ export function SandboxLaunchDialog({
             </p>
           ) : loading ? (
             <p id="sandbox-dialog-description" aria-live="polite">
-              {variant === "openclaw"
-                ? "正在创建独立沙箱并启动 OpenClaw，首次启动可能需要几分钟。"
+              {brandLabel
+                ? `正在创建独立沙箱并启动 ${brandLabel}，首次启动可能需要几分钟。`
                 : "正在寻找可用工具并创建临时 Session，通常需要一点时间。"}
             </p>
           ) : (
             <p id="sandbox-dialog-description">
-              {variant === "openclaw"
-                ? "将创建一个生命周期为 1 小时的独立 AgentKit 沙箱，并在当前页面嵌入 OpenClaw。关闭后沙箱会被销毁。"
+              {brandLabel
+                ? `将创建一个生命周期为 1 小时的独立 AgentKit 沙箱，并在当前页面嵌入 ${brandLabel}。关闭后沙箱会被销毁。`
                 : "将启动 AgentKit 沙箱与 Codex Agent 开启临时会话，您的会话将不会被持久化保存。"}
             </p>
           )}

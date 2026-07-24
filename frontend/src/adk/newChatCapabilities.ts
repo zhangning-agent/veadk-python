@@ -35,6 +35,10 @@ export async function getOpenClawCapability(): Promise<NewChatModeCapability> {
   return getCapability("/web/openclaw/capabilities");
 }
 
+export async function getHermesCapability(): Promise<NewChatModeCapability> {
+  return getCapability("/web/hermes/capabilities");
+}
+
 export async function getSkillCreatorCapability(): Promise<NewChatModeCapability> {
   return getCapability("/web/skill-creator/capabilities");
 }

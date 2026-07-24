@@ -45,12 +45,18 @@ class _FakeGateway:
     def __init__(self) -> None:
         self.created = 0
         self.tool_ids: list[str] = []
+        self.session_envs: list[dict[str, str]] = []
         self.deleted: list[SandboxCloudSession] = []
         self.thread_ids: list[str | None] = []
 
-    async def create_session(self, tool_id: str) -> SandboxCloudSession:
+    async def create_session(
+        self,
+        tool_id: str,
+        envs: dict[str, str] | None = None,
+    ) -> SandboxCloudSession:
         self.created += 1
         self.tool_ids.append(tool_id)
+        self.session_envs.append(dict(envs or {}))
         return SandboxCloudSession(
             tool_id=tool_id,
             instance_id=f"remote-{self.created}",
@@ -91,13 +97,20 @@ class _FakeGateway:
         return None
 
     async def start_openclaw(self, session: SandboxCloudSession) -> str:
-        return "https://sandbox.example/absproxy/18789/?ticket=preview"
+        return "https://sandbox.example/openclaw?ticket=preview"
+
+    async def start_hermes(self, session: SandboxCloudSession) -> str:
+        return "https://sandbox.example/hermes?ticket=preview"
+
+    def terminal_preview_url(self, session: SandboxCloudSession) -> str:
+        return "https://sandbox.example/terminal?ticket=preview"
 
 
 def _app(
     gateway: _FakeGateway,
     tool_id: str | None = "tool-studio",
     openclaw_tool_resolver=None,
+    hermes_tool_resolver=None,
 ) -> FastAPI:
     app = FastAPI()
     service = SandboxConversationService(
@@ -105,6 +118,8 @@ def _app(
         tool_id=tool_id,
         openclaw_tool_id=tool_id,
         openclaw_tool_resolver=openclaw_tool_resolver,
+        hermes_tool_id=tool_id,
+        hermes_tool_resolver=hermes_tool_resolver,
     )
 
     def _owner(request: Request) -> str:
@@ -155,6 +170,7 @@ def test_sandbox_routes_start_stream_and_delete_without_exposing_endpoint() -> N
     assert deleted.json() == {"deleted": True}
     assert [item.instance_id for item in gateway.deleted] == ["remote-1"]
     assert gateway.tool_ids == ["tool-studio"]
+    assert gateway.session_envs == [{}]
 
 
 def test_openclaw_endpoint_uses_the_image_proxy_path() -> None:
@@ -166,6 +182,14 @@ def test_openclaw_endpoint_uses_the_image_proxy_path() -> None:
         "https://sandbox.example/openclaw"
         "?faasInstanceName=instance&Authorization=secret"
     )
+    assert AgentkitSandboxGateway._endpoint_url(endpoint, "terminal") == (
+        "https://sandbox.example/terminal"
+        "?faasInstanceName=instance&Authorization=secret"
+    )
+    assert AgentkitSandboxGateway._sibling_endpoint_url(
+        "https://sandbox.example/hermes?Authorization=secret",
+        "terminal",
+    ) == "https://sandbox.example/terminal?Authorization=secret"
 
 
 def test_sandbox_capabilities_report_configured_tool(
@@ -181,7 +205,32 @@ def test_sandbox_capabilities_report_configured_tool(
     assert response.json() == {"enabled": True, "reason": ""}
 
 
-def test_openclaw_routes_create_report_lifecycle_and_delete() -> None:
+def test_openclaw_routes_create_report_lifecycle_and_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    proxied_urls: list[str] = []
+
+    async def _proxy_request(
+        self: object,
+        method: str,
+        url: str,
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        del self, method, kwargs
+        proxied_urls.append(url)
+        return SimpleNamespace(
+            status_code=200,
+            content=b'<script src="/openclaw/assets/app.js"></script>',
+            headers={
+                "content-type": "text/html; charset=utf-8",
+                "content-security-policy": "frame-ancestors 'none'",
+                "x-frame-options": "DENY",
+            },
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", _proxy_request)
     gateway = _FakeGateway()
     app = _app(gateway)
     with TestClient(app) as client:
@@ -192,9 +241,28 @@ def test_openclaw_routes_create_report_lifecycle_and_delete() -> None:
         payload = created.json()
         assert payload["status"] == "ready"
         assert payload["sandboxId"] == "remote-1"
-        assert payload["previewUrl"].endswith("?ticket=preview")
+        assert payload["previewUrl"] == payload["webuiUrl"]
+        assert payload["webuiUrl"].startswith(
+            f"/web/openclaw/sessions/{payload['sessionId']}/proxy/"
+        )
+        assert payload["webuiUrl"].endswith("/openclaw/")
+        assert payload["terminalUrl"].endswith("/terminal?ticket=preview")
         assert payload["expiresAt"] - payload["createdAt"] == 3600
         assert payload["ttlSeconds"] == 3600
+
+        proxied = client.get(payload["webuiUrl"])
+        assert proxied.status_code == 200
+        assert "x-frame-options" not in proxied.headers
+        assert "frame-ancestors 'self'" in proxied.headers["content-security-policy"]
+        assert "frame-ancestors 'none'" not in proxied.headers["content-security-policy"]
+        proxy_prefix = payload["webuiUrl"].removesuffix("/openclaw/")
+        assert f'{proxy_prefix}/openclaw/assets/app.js' in proxied.text
+        assert "Authorization=secret" in proxied_urls[0]
+
+        invalid_proxy = client.get(
+            payload["webuiUrl"].replace("/proxy/", "/proxy/invalid-", 1)
+        )
+        assert invalid_proxy.status_code == 404
 
         deleted = client.delete(
             f"/web/openclaw/sessions/{payload['sessionId']}",
@@ -202,6 +270,58 @@ def test_openclaw_routes_create_report_lifecycle_and_delete() -> None:
         )
         assert deleted.status_code == 200
         assert deleted.json() == {"deleted": True}
+
+
+def test_hermes_routes_create_report_lifecycle_and_delete() -> None:
+    gateway = _FakeGateway()
+    app = _app(gateway)
+    with TestClient(app) as client:
+        created = client.post(
+            "/web/hermes/sessions", headers={"X-Test-User": "alice"}
+        )
+        assert created.status_code == 200
+        payload = created.json()
+        assert payload["status"] == "ready"
+        assert payload["sandboxId"] == "remote-1"
+        assert payload["previewUrl"].endswith("?ticket=preview")
+        assert payload["webuiUrl"].endswith("/hermes?ticket=preview")
+        assert payload["terminalUrl"].endswith("/terminal?ticket=preview")
+        assert payload["expiresAt"] - payload["createdAt"] == 3600
+        assert payload["ttlSeconds"] == 3600
+
+        deleted = client.delete(
+            f"/web/hermes/sessions/{payload['sessionId']}",
+            headers={"X-Test-User": "alice"},
+        )
+        assert deleted.status_code == 200
+        assert deleted.json() == {"deleted": True}
+
+
+def test_openclaw_and_hermes_sessions_override_tool_model_envs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ARK_BASE_URL", "https://ark.example/api/v3")
+    monkeypatch.setenv("MODEL_AGENT_API_KEY", "configured-model-secret")
+    monkeypatch.setenv("MODEL_AGENT_NAME", "configured-model")
+    gateway = _FakeGateway()
+
+    with TestClient(_app(gateway)) as client:
+        openclaw = client.post(
+            "/web/openclaw/sessions", headers={"X-Test-User": "alice"}
+        )
+        hermes = client.post(
+            "/web/hermes/sessions", headers={"X-Test-User": "alice"}
+        )
+
+    assert openclaw.status_code == 200
+    assert hermes.status_code == 200
+    expected = {
+        "ARK_BASE_URL": "https://ark.example/api/v3",
+        "MODEL_AGENT_BASE_URL": "https://ark.example/api/v3",
+        "MODEL_AGENT_API_KEY": "configured-model-secret",
+        "MODEL_AGENT_NAME": "configured-model",
+    }
+    assert gateway.session_envs == [expected, expected]
 
 
 def test_openclaw_tool_is_resolved_only_after_user_starts_session(
@@ -422,6 +542,37 @@ async def test_gateway_accepts_a_lazy_client_factory() -> None:
 
     assert await gateway._call("list_tools", object()) == "ok"
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_forwards_session_environment_overrides() -> None:
+    requests: list[object] = []
+
+    class _Client:
+        def create_session(self, request: object) -> SimpleNamespace:
+            requests.append(request)
+            return SimpleNamespace(
+                session_id="remote-1",
+                user_session_id="user-1",
+                endpoint="https://sandbox.example?Authorization=secret",
+            )
+
+    gateway = AgentkitSandboxGateway(_Client())
+    await gateway.create_session(
+        "tool-1",
+        {
+            "ARK_BASE_URL": "https://ark.example/api/v3",
+            "MODEL_AGENT_API_KEY": "configured-model-secret",
+        },
+    )
+
+    assert len(requests) == 1
+    assert {
+        item.key: item.value for item in getattr(requests[0], "envs")
+    } == {
+        "ARK_BASE_URL": "https://ark.example/api/v3",
+        "MODEL_AGENT_API_KEY": "configured-model-secret",
+    }
 
 
 @pytest.mark.asyncio

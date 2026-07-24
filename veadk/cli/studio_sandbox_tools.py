@@ -32,6 +32,9 @@ _OPENCLAW_COMMAND = "/opt/gem/run.sh"
 _OPENCLAW_PORT = 8080
 _OPENCLAW_TAG_KEY = "veadk-studio-purpose"
 _OPENCLAW_TAG_VALUE = "openclaw"
+_HERMES_TAG_VALUE = "hermes"
+_HERMES_NAME_MARKERS = ("hermes",)
+_OPENCLAW_NAME_MARKERS = ("openclaw", "arkclaw")
 _READY_STATUS = "Ready"
 _FAILED_STATUSES = frozenset({"Error", "Failed", "CreateFailed", "Deleting", "Deleted"})
 
@@ -59,10 +62,15 @@ def ensure_studio_openclaw_tool(
     timeout_seconds: float = 600.0,
     poll_interval: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
+    tag_value: str = _OPENCLAW_TAG_VALUE,
+    name_markers: tuple[str, ...] = _OPENCLAW_NAME_MARKERS,
+    description: str = "Reusable VeADK Studio OpenClaw sandbox image",
+    kind_label: str = "OpenClaw",
+    api_key_prefix: str = "studio-openclaw",
 ) -> str:
-    """Reuse a tagged/named OpenClaw Tool, or create its immutable image config.
+    """Reuse a tagged/named sandbox Tool, or create its immutable image config.
 
-    Model settings belong to the OpenClaw image, so they are required only when
+    Model settings belong to the sandbox image, so they are required only when
     a new Tool must be created. An existing tagged/named Tool already owns that
     configuration and must remain reusable without resupplying its secret.
     """
@@ -84,7 +92,7 @@ def ensure_studio_openclaw_tool(
             TagFilters=[
                 tools_types.TagFiltersItemForListTools(
                     Key=_OPENCLAW_TAG_KEY,
-                    Values=[_OPENCLAW_TAG_VALUE],
+                    Values=[tag_value],
                 )
             ],
         ),
@@ -106,7 +114,7 @@ def ensure_studio_openclaw_tool(
                     tool.name == name
                     or any(
                         tag.key == _OPENCLAW_TAG_KEY
-                        and tag.value == _OPENCLAW_TAG_VALUE
+                        and tag.value == tag_value
                         for tag in (tool.tags or [])
                     )
                 )
@@ -132,7 +140,7 @@ def ensure_studio_openclaw_tool(
                 and tool.tool_type == _OPENCLAW_TOOL_TYPE
                 and any(
                     marker in (tool.name or "").lower()
-                    for marker in ("openclaw", "arkclaw")
+                    for marker in name_markers
                 )
             )
             next_token = response.next_token or None
@@ -145,8 +153,8 @@ def ensure_studio_openclaw_tool(
         named = [tool for tool in matches.values() if tool.name == name]
         if len(named) != 1:
             raise RuntimeError(
-                "Multiple tagged AgentKit OpenClaw Tools were found; "
-                "set SANDBOX_OPENCLAW_TOOL explicitly."
+                f"Multiple tagged AgentKit {kind_label} Tools were found; "
+                "set the corresponding SANDBOX Tool ID env var explicitly."
             )
         matches = {named[0].tool_id: named[0]}
 
@@ -163,12 +171,12 @@ def ensure_studio_openclaw_tool(
         missing = [key for key, value in required.items() if not value.strip()]
         if missing:
             raise ValueError(
-                f"Missing OpenClaw Tool configuration: {', '.join(missing)}"
+                f"Missing {kind_label} Tool configuration: {', '.join(missing)}"
             )
         response = tools_client.create_tool(
             tools_types.CreateToolRequest(
                 Name=name,
-                Description="Reusable VeADK Studio OpenClaw sandbox image",
+                Description=description,
                 ToolType=_OPENCLAW_CREATE_TOOL_TYPE,
                 ProjectName=_PROJECT_NAME,
                 ImageUrl=requested_image_url,
@@ -178,7 +186,7 @@ def ensure_studio_openclaw_tool(
                 MemoryMb=8192,
                 AuthorizerConfiguration=tools_types.AuthorizerForCreateTool(
                     KeyAuth=tools_types.AuthorizerKeyAuthForCreateTool(
-                        ApiKeyName=f"studio-openclaw-{secrets.token_hex(8)}",
+                        ApiKeyName=f"{api_key_prefix}-{secrets.token_hex(8)}",
                         ApiKeyLocation="Header",
                     )
                 ),
@@ -199,7 +207,7 @@ def ensure_studio_openclaw_tool(
                 ],
                 Tags=[
                     tools_types.TagsItemForCreateTool(
-                        Key=_OPENCLAW_TAG_KEY, Value=_OPENCLAW_TAG_VALUE
+                        Key=_OPENCLAW_TAG_KEY, Value=tag_value
                     )
                 ],
             )
@@ -207,7 +215,7 @@ def ensure_studio_openclaw_tool(
         tool_id = (response.tool_id or "").strip()
         if not tool_id:
             raise RuntimeError(
-                f"Creating AgentKit OpenClaw Tool '{name}' did not return a Tool ID."
+                f"Creating AgentKit {kind_label} Tool '{name}' did not return a Tool ID."
             )
 
     deadline = time.monotonic() + timeout_seconds
@@ -224,19 +232,58 @@ def ensure_studio_openclaw_tool(
                 or tool.port != _OPENCLAW_PORT
             ):
                 raise RuntimeError(
-                    f"AgentKit OpenClaw Tool '{name}' is Ready but its image/port "
+                    f"AgentKit {kind_label} Tool '{name}' is Ready but its image/port "
                     "does not match the requested configuration."
                 )
             return tool_id
         if tool.status in _FAILED_STATUSES:
             raise RuntimeError(
-                f"AgentKit OpenClaw Tool '{name}' entered status {tool.status}."
+                f"AgentKit {kind_label} Tool '{name}' entered status {tool.status}."
             )
         if time.monotonic() >= deadline:
             raise TimeoutError(
-                f"Timed out waiting for AgentKit OpenClaw Tool '{name}' to be ready."
+                f"Timed out waiting for AgentKit {kind_label} Tool '{name}' to be ready."
             )
         sleep(poll_interval)
+
+
+def ensure_studio_hermes_tool(
+    *,
+    name: str,
+    image_url: str,
+    model_api_key: str,
+    model_name: str,
+    model_base_url: str,
+    access_key: str = "",
+    secret_key: str = "",
+    region: str = "cn-beijing",
+    session_token: str = "",
+    client: Any | None = None,
+    timeout_seconds: float = 600.0,
+    poll_interval: float = 5.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Reuse or create a Hermes sandbox Tool (shares OpenClaw's config pattern)."""
+    return ensure_studio_openclaw_tool(
+        name=name,
+        image_url=image_url,
+        model_api_key=model_api_key,
+        model_name=model_name,
+        model_base_url=model_base_url,
+        access_key=access_key,
+        secret_key=secret_key,
+        region=region,
+        session_token=session_token,
+        client=client,
+        timeout_seconds=timeout_seconds,
+        poll_interval=poll_interval,
+        sleep=sleep,
+        tag_value=_HERMES_TAG_VALUE,
+        name_markers=_HERMES_NAME_MARKERS,
+        description="Reusable VeADK Studio Hermes sandbox image",
+        kind_label="Hermes",
+        api_key_prefix="studio-hermes",
+    )
 
 
 def ensure_studio_code_env_tool(

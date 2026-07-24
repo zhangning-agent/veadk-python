@@ -1,4 +1,4 @@
-.openclaw-workspace {
+.hermes-workspace {
   position: relative;
   display: grid;
   grid-template-rows: 44px minmax(0, 1fr);
@@ -7,22 +7,22 @@
   min-height: 0;
   background: hsl(var(--background));
 }
-.openclaw-workspace__header {
+.hermes-workspace__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 14px 0 18px;
   border-bottom: 1px solid hsl(var(--border));
 }
-.openclaw-workspace__identity { display: flex; align-items: center; }
-.openclaw-workspace__brand { margin-left: 8px; font-size: 14px; font-weight: 650; }
-.openclaw-workspace__sandbox {
+.hermes-workspace__identity { display: flex; align-items: center; }
+.hermes-workspace__brand { margin-left: 8px; font-size: 14px; font-weight: 650; }
+.hermes-workspace__sandbox {
   margin-left: 8px;
   color: hsl(var(--muted-foreground));
   font-size: 11px;
 }
-.openclaw-workspace__controls { display: flex; align-items: center; gap: 8px; }
-.openclaw-workspace__views {
+.hermes-workspace__controls { display: flex; align-items: center; gap: 8px; }
+.hermes-workspace__views {
   display: inline-flex;
   align-items: center;
   padding: 2px;
@@ -30,7 +30,7 @@
   border-radius: 8px;
   background: hsl(var(--muted) / .55);
 }
-.openclaw-workspace__views button {
+.hermes-workspace__views button {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -43,14 +43,14 @@
   font-size: 11px;
   cursor: pointer;
 }
-.openclaw-workspace__views button[aria-selected="true"] {
+.hermes-workspace__views button[aria-selected="true"] {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   box-shadow: 0 1px 2px hsl(var(--foreground) / .08);
 }
-.openclaw-workspace__actions { display: flex; align-items: center; gap: 4px; }
-.openclaw-workspace__actions a,
-.openclaw-workspace__actions button {
+.hermes-workspace__actions { display: flex; align-items: center; gap: 4px; }
+.hermes-workspace__actions a,
+.hermes-workspace__actions button {
   display: grid;
   place-items: center;
   width: 30px;
@@ -61,10 +61,10 @@
   color: hsl(var(--muted-foreground));
   cursor: pointer;
 }
-.openclaw-workspace__actions a:hover,
-.openclaw-workspace__actions button:hover { background: hsl(var(--accent)); color: hsl(var(--foreground)); }
-.openclaw-workspace iframe { width: 100%; height: 100%; border: 0; background: #0f1115; }
-.openclaw-workspace__loading {
+.hermes-workspace__actions a:hover,
+.hermes-workspace__actions button:hover { background: hsl(var(--accent)); color: hsl(var(--foreground)); }
+.hermes-workspace iframe { width: 100%; height: 100%; border: 0; background: #0f1115; }
+.hermes-workspace__loading {
   position: absolute;
   z-index: 1;
   inset: 44px 0 0;
@@ -76,8 +76,8 @@
   color: hsl(var(--muted-foreground));
   font-size: 13px;
 }
-.openclaw-workspace__loading svg { width: 17px; }
-.openclaw-lifecycle {
+.hermes-workspace__loading svg { width: 17px; }
+.hermes-lifecycle {
   position: relative;
   display: flex;
   align-items: center;
@@ -91,27 +91,27 @@
   font-size: 11px;
   white-space: nowrap;
 }
-.openclaw-lifecycle__dot {
+.hermes-lifecycle__dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: #22c55e;
   box-shadow: 0 0 0 3px rgb(34 197 94 / .12);
 }
-.openclaw-lifecycle__dot.is-expired { background: #ef4444; box-shadow: none; }
-.openclaw-lifecycle__divider { width: 1px; height: 13px; background: hsl(var(--border)); }
-.openclaw-lifecycle__brand {
+.hermes-lifecycle__dot.is-expired { background: #ef4444; box-shadow: none; }
+.hermes-lifecycle__divider { width: 1px; height: 13px; background: hsl(var(--border)); }
+.hermes-lifecycle__brand {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   color: hsl(var(--foreground));
   font-weight: 600;
 }
-.openclaw-lifecycle__brand .openclaw-lifecycle__brand-icon {
+.hermes-lifecycle__brand .hermes-lifecycle__brand-icon {
   width: 16px;
   height: 16px;
 }
-.openclaw-lifecycle button {
+.hermes-lifecycle button {
   display: grid;
   place-items: center;
   padding: 0;
@@ -120,7 +120,7 @@
   color: inherit;
   cursor: pointer;
 }
-.openclaw-lifecycle .openclaw-lifecycle__open {
+.hermes-lifecycle .hermes-lifecycle__open {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -130,9 +130,9 @@
   border-radius: 6px;
   color: hsl(var(--foreground));
 }
-.openclaw-lifecycle__open:hover { background: hsl(var(--accent)); }
+.hermes-lifecycle__open:hover { background: hsl(var(--accent)); }
 
 @media (max-width: 720px) {
-  .openclaw-workspace__views button { padding: 0 6px; }
-  .openclaw-workspace__views button svg { display: none; }
+  .hermes-workspace__views button { padding: 0 6px; }
+  .hermes-workspace__views button svg { display: none; }
 }

@@ -86,10 +86,13 @@ import {
 import {
   getSandboxCapability,
   getOpenClawCapability,
+  getHermesCapability,
   getSkillCreatorCapability,
 } from "./adk/newChatCapabilities";
 import { openClawClient, type OpenClawSession } from "./adk/openclaw";
 import { OpenClawLifecycle, OpenClawWorkspace } from "./ui/OpenClawWorkspace";
+import { hermesClient, type HermesSession } from "./adk/hermes";
+import { HermesLifecycle, HermesWorkspace } from "./ui/HermesWorkspace";
 import {
   SandboxLaunchDialog,
   type SandboxLaunchState,
@@ -563,6 +566,10 @@ export default function App() {
     useState<SandboxSessionInfo | null>(null);
   const [openClawSession, setOpenClawSession] =
     useState<OpenClawSession | null>(null);
+  const [hermesSession, setHermesSession] =
+    useState<HermesSession | null>(null);
+  const [openClawMinimized, setOpenClawMinimized] = useState(false);
+  const [hermesMinimized, setHermesMinimized] = useState(false);
   const [sandboxTurns, setSandboxTurns] = useState<Turn[]>([]);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxLaunchOpen, setSandboxLaunchOpen] = useState(false);
@@ -584,6 +591,10 @@ export default function App() {
   const turns = sandboxSession ? sandboxTurns : persistentTurns;
   const conversationTitle = sandboxSession
     ? "灵光一现"
+    : openClawSession && !openClawMinimized
+    ? "OpenClaw 沙箱"
+    : hermesSession && !hermesMinimized
+    ? "Hermes 沙箱"
     : activeSessionTitle(
         sessions.find((session) => session.id === sessionId),
         turns,
@@ -601,6 +612,7 @@ export default function App() {
   const [newChatCapabilities, setNewChatCapabilities] = useState<{
     temporaryEnabled?: boolean;
     openclawEnabled?: boolean;
+    hermesEnabled?: boolean;
     skillCreateEnabled?: boolean;
   }>({});
   const [skillJob, setSkillJob] = useState<SkillCreationJob | null>(null);
@@ -904,14 +916,17 @@ export default function App() {
     void Promise.allSettled([
       getSandboxCapability(),
       getOpenClawCapability(),
+      getHermesCapability(),
       getSkillCreatorCapability(),
-    ]).then(([sandboxResult, openClawResult, skillResult]) => {
+    ]).then(([sandboxResult, openClawResult, hermesResult, skillResult]) => {
       if (cancelled) return;
       setNewChatCapabilities({
         temporaryEnabled:
           sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
         openclawEnabled:
           openClawResult.status === "fulfilled" && openClawResult.value.enabled,
+        hermesEnabled:
+          hermesResult.status === "fulfilled" && hermesResult.value.enabled,
         skillCreateEnabled:
           skillResult.status === "fulfilled" && skillResult.value.enabled,
       });
@@ -1156,8 +1171,26 @@ export default function App() {
     }
   }
 
-  function openSandboxLaunch() {
-    if (sandboxSession || openClawSession) return;
+  function openSandboxLaunch(
+    mode: "temporary" | "openclaw" | "hermes",
+  ) {
+    if (mode === "openclaw" && openClawSession) {
+      openOpenClawSession();
+      return;
+    }
+    if (mode === "hermes" && hermesSession) {
+      openHermesSession();
+      return;
+    }
+    if (sandboxSession) return;
+    if (mode === "temporary" && (openClawSession || hermesSession)) {
+      setNewChatMode("agent");
+      setError("请先关闭 OpenClaw 和 Hermes 沙箱，再启动临时会话。");
+      return;
+    }
+    setNewChatMode(mode);
+    if (mode === "openclaw" && hermesSession) setHermesMinimized(true);
+    if (mode === "hermes" && openClawSession) setOpenClawMinimized(true);
     setError("");
     setSandboxLaunchError("");
     setSandboxLaunchState("confirm");
@@ -1171,9 +1204,9 @@ export default function App() {
     setSandboxLaunchState("confirm");
     setSandboxLaunchError("");
     if (
-      !sandboxSession &&
-      !openClawSession &&
-      (newChatMode === "temporary" || newChatMode === "openclaw")
+      (newChatMode === "temporary" && !sandboxSession) ||
+      (newChatMode === "openclaw" && !openClawSession) ||
+      (newChatMode === "hermes" && !hermesSession)
     ) {
       setNewChatMode("agent");
     }
@@ -1187,8 +1220,11 @@ export default function App() {
     setSandboxLaunchError("");
     try {
       const launchingOpenClaw = newChatMode === "openclaw";
+      const launchingHermes = newChatMode === "hermes";
       const nextSession = launchingOpenClaw
         ? await openClawClient.startSession(controller.signal)
+        : launchingHermes
+        ? await hermesClient.startSession(controller.signal)
         : await sandboxClient.startSession({ signal: controller.signal });
       if (sandboxLaunchAbortRef.current !== controller) return;
       viewSidRef.current = "";
@@ -1196,17 +1232,29 @@ export default function App() {
       setPendingTurns([]);
       setInput("");
       setInvocation(emptyInvocation());
-      setNewChatMode(launchingOpenClaw ? "openclaw" : "temporary");
+      setNewChatMode(
+        launchingOpenClaw ? "openclaw" : launchingHermes ? "hermes" : "temporary",
+      );
       discardSkillCreation();
       setSkillCreating(false);
       discardDraftAttachments(attachments);
       setAttachments([]);
       if (launchingOpenClaw) {
         setSandboxSession(null);
+        if (hermesSession) setHermesMinimized(true);
+        setOpenClawMinimized(false);
         setOpenClawSession(nextSession as OpenClawSession);
+      } else if (launchingHermes) {
+        setSandboxSession(null);
+        if (openClawSession) setOpenClawMinimized(true);
+        setHermesMinimized(false);
+        setHermesSession(nextSession as HermesSession);
       } else {
         setSandboxTurns([]);
         setOpenClawSession(null);
+        setHermesSession(null);
+        setOpenClawMinimized(false);
+        setHermesMinimized(false);
         setSandboxSession(nextSession as SandboxSessionInfo);
       }
       setCreateView(null);
@@ -1253,6 +1301,7 @@ export default function App() {
   function exitOpenClawSession() {
     const closingSession = openClawSession;
     setOpenClawSession(null);
+    setOpenClawMinimized(false);
     setNewChatMode("agent");
     setError("");
     if (closingSession) {
@@ -1260,6 +1309,61 @@ export default function App() {
         .closeSession(closingSession.id)
         .catch((closeError) => setError(String(closeError)));
     }
+  }
+
+  function exitHermesSession() {
+    const closingSession = hermesSession;
+    setHermesSession(null);
+    setHermesMinimized(false);
+    setNewChatMode("agent");
+    setError("");
+    if (closingSession) {
+      void hermesClient
+        .closeSession(closingSession.id)
+        .catch((closeError) => setError(String(closeError)));
+    }
+  }
+
+  function minimizeOpenClawSession() {
+    if (!openClawSession) return;
+    setOpenClawMinimized(true);
+    setNewChatMode("agent");
+    setError("");
+  }
+
+  function minimizeHermesSession() {
+    if (!hermesSession) return;
+    setHermesMinimized(true);
+    setNewChatMode("agent");
+    setError("");
+  }
+
+  function openOpenClawSession() {
+    if (!openClawSession) return;
+    if (hermesSession) setHermesMinimized(true);
+    setOpenClawMinimized(false);
+    setNewChatMode("openclaw");
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setError("");
+  }
+
+  function openHermesSession() {
+    if (!hermesSession) return;
+    if (openClawSession) setOpenClawMinimized(true);
+    setHermesMinimized(false);
+    setNewChatMode("hermes");
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setError("");
   }
 
   async function sendSandboxMessage(text: string) {
@@ -1335,7 +1439,8 @@ export default function App() {
   // keeps running and persisting — its writes are suppressed here by viewSidRef.
   function startNewChat() {
     exitSandboxSession();
-    exitOpenClawSession();
+    minimizeOpenClawSession();
+    minimizeHermesSession();
     setError("");
     setGreeting(pickGreeting());
     setNewChatMode("agent");
@@ -1373,7 +1478,8 @@ export default function App() {
 
   async function pickSession(id: string) {
     if (sandboxSession) exitSandboxSession();
-    if (openClawSession) exitOpenClawSession();
+    if (openClawSession) minimizeOpenClawSession();
+    if (hermesSession) minimizeHermesSession();
     if (id === sessionId) return;
     viewSidRef.current = id;
     setError("");
@@ -1725,7 +1831,8 @@ export default function App() {
   // background stream keeps persisting to its own (old) session.
   const selectAgent = (id: string) => {
     if (sandboxSession) exitSandboxSession();
-    if (openClawSession) exitOpenClawSession();
+    if (openClawSession) minimizeOpenClawSession();
+    if (hermesSession) minimizeHermesSession();
     setConnections(loadConnections());
     viewSidRef.current = "";
     setSessionId("");
@@ -1766,7 +1873,8 @@ export default function App() {
         }}
         onSearch={() => {
           if (sandboxSession) exitSandboxSession();
-          if (openClawSession) exitOpenClawSession();
+          if (openClawSession) minimizeOpenClawSession();
+          if (hermesSession) minimizeHermesSession();
           setCreateView(null);
           setSkillCenter(false);
           setAddAgent(false);
@@ -1781,7 +1889,8 @@ export default function App() {
             return;
           }
           if (sandboxSession) exitSandboxSession();
-          if (openClawSession) exitOpenClawSession();
+          if (openClawSession) minimizeOpenClawSession();
+          if (hermesSession) minimizeHermesSession();
           // "添加 Agent" — open the two-card chooser. Drop any selected session.
           viewSidRef.current = "";
           setSessionId("");
@@ -1796,7 +1905,8 @@ export default function App() {
         }}
         onSkillCenter={() => {
           if (sandboxSession) exitSandboxSession();
-          if (openClawSession) exitOpenClawSession();
+          if (openClawSession) minimizeOpenClawSession();
+          if (hermesSession) minimizeHermesSession();
           setCreateView(null);
           setAddAgent(false);
           setAddMenu(false);
@@ -1811,7 +1921,8 @@ export default function App() {
             return;
           }
           if (sandboxSession) exitSandboxSession();
-          if (openClawSession) exitOpenClawSession();
+          if (openClawSession) minimizeOpenClawSession();
+          if (hermesSession) minimizeHermesSession();
           viewSidRef.current = "";
           setCreateView(null);
           setSkillCenter(false);
@@ -1828,7 +1939,8 @@ export default function App() {
             return;
           }
           if (sandboxSession) exitSandboxSession();
-          if (openClawSession) exitOpenClawSession();
+          if (openClawSession) minimizeOpenClawSession();
+          if (hermesSession) minimizeHermesSession();
           viewSidRef.current = "";
           setSessionId("");
           setCreateView(null);
@@ -1974,16 +2086,17 @@ export default function App() {
               }
               temporaryEnabled={newChatCapabilities.temporaryEnabled}
               openclawEnabled={newChatCapabilities.openclawEnabled}
+              hermesEnabled={newChatCapabilities.hermesEnabled}
               skillCreateEnabled={newChatCapabilities.skillCreateEnabled}
               onModeChange={(mode) => {
                 if (
                   (mode === "temporary" && !newChatCapabilities.temporaryEnabled) ||
                   (mode === "openclaw" && !newChatCapabilities.openclawEnabled) ||
+                  (mode === "hermes" && !newChatCapabilities.hermesEnabled) ||
                   (mode === "skill-create" && !newChatCapabilities.skillCreateEnabled)
                 ) return;
-                if (mode === "temporary" || mode === "openclaw") {
-                  setNewChatMode(mode);
-                  openSandboxLaunch();
+                if (mode === "temporary" || mode === "openclaw" || mode === "hermes") {
+                  openSandboxLaunch(mode);
                   return;
                 }
                 setNewChatMode(mode);
@@ -2053,7 +2166,18 @@ export default function App() {
               rightContent={
                 <>
                   {openClawSession ? (
-                    <OpenClawLifecycle session={openClawSession} />
+                    <OpenClawLifecycle
+                      session={openClawSession}
+                      minimized={openClawMinimized}
+                      onOpen={openOpenClawSession}
+                    />
+                  ) : null}
+                  {hermesSession ? (
+                    <HermesLifecycle
+                      session={hermesSession}
+                      minimized={hermesMinimized}
+                      onOpen={openHermesSession}
+                    />
                   ) : null}
                   <DeploymentTaskStatus
                     tasks={canCreateAgents ? deploymentTasks : []}
@@ -2062,7 +2186,7 @@ export default function App() {
                 </>
               }
             />
-            <main className={`main${sandboxSession ? " is-sandbox-session" : ""}${openClawSession ? " is-openclaw-session" : ""}`}>
+            <main className={`main${sandboxSession ? " is-sandbox-session" : ""}${openClawSession && !openClawMinimized ? " is-openclaw-session" : ""}${hermesSession && !hermesMinimized ? " is-hermes-session" : ""}`}>
             {error && <div className="error">{error}</div>}
             {loadingSession && (
               <div className="session-loading">
@@ -2070,8 +2194,18 @@ export default function App() {
               </div>
             )}
 
-            {openClawSession ? (
-              <OpenClawWorkspace session={openClawSession} onExit={startNewChat} />
+            {openClawSession && !openClawMinimized ? (
+              <OpenClawWorkspace
+                session={openClawSession}
+                onMinimize={minimizeOpenClawSession}
+                onExit={exitOpenClawSession}
+              />
+            ) : hermesSession && !hermesMinimized ? (
+              <HermesWorkspace
+                session={hermesSession}
+                onMinimize={minimizeHermesSession}
+                onExit={exitHermesSession}
+              />
             ) : showManageAgents ? (
               <ManageAgentsView
                 currentRuntimeId={currentRuntime?.runtimeId}
@@ -2306,7 +2440,13 @@ export default function App() {
         open={sandboxLaunchOpen}
         state={sandboxLaunchState}
         error={sandboxLaunchError}
-        variant={newChatMode === "openclaw" ? "openclaw" : "temporary"}
+        variant={
+          newChatMode === "openclaw"
+            ? "openclaw"
+            : newChatMode === "hermes"
+            ? "hermes"
+            : "temporary"
+        }
         onCancel={cancelSandboxLaunch}
         onConfirm={() => void launchSandboxSession()}
       />

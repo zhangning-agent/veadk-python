@@ -2,11 +2,11 @@ import { withAuth } from "./auth";
 import { withLocalUser } from "./identity";
 import { requestSignal } from "./timeout";
 
-const OPENCLAW_API = "/web/openclaw/sessions";
+const HERMES_API = "/web/hermes/sessions";
 const START_TIMEOUT_MS = 360_000;
 const CLOSE_TIMEOUT_MS = 15_000;
 
-export interface OpenClawSession {
+export interface HermesSession {
   id: string;
   sandboxId: string;
   previewUrl: string;
@@ -17,7 +17,7 @@ export interface OpenClawSession {
   ttlSeconds: number;
 }
 
-interface OpenClawSessionResponse {
+interface HermesSessionResponse {
   sessionId?: unknown;
   sandboxId?: unknown;
   previewUrl?: unknown;
@@ -44,18 +44,18 @@ async function errorMessage(response: Response): Promise<string> {
   } catch {
     // Fall through to the bounded HTTP diagnostic.
   }
-  return `OpenClaw 沙箱创建失败（HTTP ${response.status}）`;
+  return `Hermes 沙箱创建失败（HTTP ${response.status}）`;
 }
 
-export const openClawClient = {
-  async startSession(signal?: AbortSignal): Promise<OpenClawSession> {
-    const response = await fetch(withAuth(OPENCLAW_API), {
+export const hermesClient = {
+  async startSession(signal?: AbortSignal): Promise<HermesSession> {
+    const response = await fetch(withAuth(HERMES_API), {
       method: "POST",
       headers: headers(),
       signal: requestSignal(signal, START_TIMEOUT_MS),
     });
     if (!response.ok) throw new Error(await errorMessage(response));
-    const data = await response.json() as OpenClawSessionResponse;
+    const data = await response.json() as HermesSessionResponse;
     if (
       data.status !== "ready" ||
       typeof data.sessionId !== "string" ||
@@ -67,7 +67,7 @@ export const openClawClient = {
       typeof data.expiresAt !== "number" ||
       typeof data.ttlSeconds !== "number"
     ) {
-      throw new Error("OpenClaw 沙箱返回了无效的会话信息");
+      throw new Error("Hermes 沙箱返回了无效的会话信息");
     }
     return {
       id: data.sessionId,
@@ -84,7 +84,7 @@ export const openClawClient = {
   async closeSession(sessionId: string, signal?: AbortSignal): Promise<void> {
     if (!sessionId) return;
     const response = await fetch(
-      withAuth(`${OPENCLAW_API}/${encodeURIComponent(sessionId)}`),
+      withAuth(`${HERMES_API}/${encodeURIComponent(sessionId)}`),
       {
         method: "DELETE",
         headers: headers(),
