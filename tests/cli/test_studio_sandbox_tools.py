@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 from veadk.cli.studio_sandbox_tools import (
     ensure_studio_code_env_tool,
+    ensure_studio_code_sandbox_tool,
     ensure_studio_hermes_tool,
     ensure_studio_openclaw_tool,
 )
@@ -203,6 +204,47 @@ def test_ensure_studio_hermes_tool_uses_dedicated_branding_and_tag() -> None:
     assert request.description == "Reusable VeADK Studio Hermes sandbox image"
     assert {tag.key: tag.value for tag in request.tags} == {
         "veadk-studio-purpose": "hermes"
+    }
+
+
+def test_ensure_studio_code_sandbox_tool_uses_codex_envs_and_tag() -> None:
+    requests: list[object] = []
+    client = SimpleNamespace(
+        list_tools=lambda _: SimpleNamespace(tools=[], next_token=None),
+        get_tool=lambda _: SimpleNamespace(
+            status="Ready",
+            image_url="registry/code-env:test",
+            port=8080,
+        ),
+        create_tool=lambda request: (
+            requests.append(request) or SimpleNamespace(tool_id="tool-code")
+        ),
+    )
+
+    assert (
+        ensure_studio_code_sandbox_tool(
+            name="veadk-studio-demo-code-sandbox-12345678",
+            image_url="registry/code-env:test",
+            model_api_key="ark-secret",
+            model_name="deepseek-v4-flash-260425",
+            model_base_url="https://ark.example/api/v3",
+            client=client,
+            timeout_seconds=0,
+        )
+        == "tool-code"
+    )
+    request = requests[0]
+    assert request.tool_type == "Private"
+    assert request.command == "/opt/gem/run.sh"
+    assert request.port == 8080
+    assert request.description == "Reusable VeADK Studio Code sandbox image"
+    assert {env.key: env.value for env in request.envs} == {
+        "CODEX_API_KEY": "ark-secret",
+        "CODEX_MODEL": "deepseek-v4-flash-260425",
+        "CODEX_BASE_URL": "https://ark.example/api/v3",
+    }
+    assert {tag.key: tag.value for tag in request.tags} == {
+        "veadk-studio-purpose": "code-sandbox"
     }
 
 

@@ -132,6 +132,11 @@
   top: 0;
   left: 0;
 }
+.new-chat-mode__sandbox-stack .sandbox-brand-icon:nth-child(2) {
+  top: 3px;
+  left: 4px;
+  background: hsl(var(--background));
+}
 .new-chat-mode__sandbox-stack .sandbox-brand-icon:last-child {
   right: 0;
   bottom: 0;

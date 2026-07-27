@@ -10,7 +10,7 @@ export interface SandboxLaunchDialogProps {
   error?: string;
   onCancel: () => void;
   onConfirm: () => void;
-  variant?: "temporary" | "openclaw" | "hermes";
+  variant?: "temporary" | "openclaw" | "hermes" | "code-sandbox";
 }
 
 export function SandboxLaunchDialog({
@@ -65,6 +65,8 @@ export function SandboxLaunchDialog({
       ? "OpenClaw"
       : variant === "hermes"
       ? "Hermes"
+      : variant === "code-sandbox"
+      ? "Code 沙箱"
       : null;
   const title = loading
     ? brandLabel
@@ -72,6 +74,8 @@ export function SandboxLaunchDialog({
       : "正在初始化沙箱"
     : state === "error"
       ? "启动失败"
+      : variant === "code-sandbox"
+      ? "创建 Code 沙箱"
       : brandLabel
       ? `创建 ${brandLabel} 沙箱`
       : "启用临时会话";

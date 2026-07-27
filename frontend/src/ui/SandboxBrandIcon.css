@@ -10,3 +10,34 @@
   border: 1px solid hsl(var(--border));
   border-radius: 5px;
 }
+
+.sandbox-brand-icon--code {
+  overflow: visible;
+  padding: 1px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  background: linear-gradient(145deg, #fff, #f5f1fb);
+}
+
+.sandbox-brand-icon__code-back {
+  fill: #7f73ee;
+  stroke: none;
+}
+
+.sandbox-brand-icon__code-main {
+  fill: #4c70ed;
+  stroke: none;
+}
+
+.sandbox-brand-icon__code-side {
+  fill: #8f5ed7;
+  stroke: none;
+}
+
+.sandbox-brand-icon__code-prompt {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.55px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

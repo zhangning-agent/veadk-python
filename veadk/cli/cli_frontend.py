@@ -983,12 +983,72 @@ def _run_frontend_server(
             ),
         )
 
+    def _code_tool_resolver() -> str:
+        """Run only after a user confirms Code sandbox launch in Chat."""
+        from veadk.cli.studio_sandbox_tools import (
+            ensure_studio_code_sandbox_tool,
+            studio_sandbox_tool_name,
+        )
+
+        application_name = (
+            os.getenv("VEADK_STUDIO_APP_NAME")
+            or os.getenv("VEADK_STUDIO_APPLICATION_NAME")
+            or "veadk-studio"
+        )
+        common = {
+            "name": studio_sandbox_tool_name(application_name, "code-sandbox"),
+            "image_url": (
+                "temp-cr-images-cn-beijing.cr.volces.com/"
+                "agentkit-sandbox/code-env:0.0.7.35"
+            ),
+            "client": _sandbox_client(),
+        }
+        try:
+            return ensure_studio_code_sandbox_tool(
+                **common,
+                model_api_key="",
+                model_name="",
+                model_base_url="",
+            )
+        except ValueError as error:
+            if "Missing Code Sandbox Tool configuration" not in str(error):
+                raise
+
+        from veadk.auth.veauth.ark_veauth import get_ark_token
+
+        access_key, secret_key, session_token = _resolve_ve_credentials()
+        return ensure_studio_code_sandbox_tool(
+            **common,
+            model_api_key=(
+                os.getenv("CODEX_API_KEY")
+                or os.getenv("MODEL_AGENT_API_KEY")
+                or get_ark_token(
+                    region=os.getenv("AGENTKIT_SANDBOX_REGION", "cn-beijing"),
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    session_token=session_token,
+                )
+            ),
+            model_name=(
+                os.getenv("CODEX_MODEL")
+                or os.getenv("MODEL_AGENT_NAME")
+                or "deepseek-v4-flash-260425"
+            ),
+            model_base_url=(
+                os.getenv("CODEX_BASE_URL")
+                or os.getenv("ARK_BASE_URL")
+                or os.getenv("MODEL_AGENT_BASE_URL")
+                or "https://ark.cn-beijing.volces.com/api/v3"
+            ),
+        )
+
     mount_sandbox_routes(
         app,
         SandboxConversationService(
             AgentkitSandboxGateway(_sandbox_client),
             openclaw_tool_resolver=_openclaw_tool_resolver,
             hermes_tool_resolver=_hermes_tool_resolver,
+            code_tool_resolver=_code_tool_resolver,
         ),
         _sandbox_owner,
     )
@@ -3725,6 +3785,14 @@ def _resolve_studio_identity_region(
     help="Reusable AgentKit OpenClaw Tool ID. Default: reuse by tag/name or "
     "create one from the configured OpenClaw image during deployment.",
 )
+@click.option(
+    "--sandbox-code-tool-id",
+    "sandbox_code_tool_id",
+    default=None,
+    envvar="SANDBOX_CODE_TOOL",
+    help="Reusable AgentKit Code sandbox Tool ID. Default: reuse by tag/name "
+    "or create one from the configured Code image on first launch.",
+)
 def frontend_deploy(
     user_pool_id: str,
     allowed_client_id: str,
@@ -3747,6 +3815,7 @@ def frontend_deploy(
     sandbox_chat_codex_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
     sandbox_openclaw_tool_id: str | None,
+    sandbox_code_tool_id: str | None,
 ) -> None:
     """Deploy the SSO web frontend to VeFaaS.
 
@@ -3885,6 +3954,15 @@ def frontend_deploy(
             "OpenClaw Tool provisioning is deferred until a user explicitly "
             "launches OpenClaw from the Studio Chat page."
         )
+    if sandbox_code_tool_id:
+        click.echo(
+            f"Using configured AgentKit Code sandbox Tool: {sandbox_code_tool_id}"
+        )
+    else:
+        click.echo(
+            "Code sandbox Tool provisioning is deferred until a user explicitly "
+            "launches Code sandbox from the Studio Chat page."
+        )
 
     chat_codex_tool_id = sandbox_tool_ids["chat"]
     skill_creator_tool_id = sandbox_tool_ids["skill"]
@@ -3918,6 +3996,8 @@ def frontend_deploy(
     veadk_environments["SANDBOX_SKILL_CREATOR"] = skill_creator_tool_id
     if sandbox_openclaw_tool_id:
         veadk_environments["SANDBOX_OPENCLAW_TOOL"] = sandbox_openclaw_tool_id
+    if sandbox_code_tool_id:
+        veadk_environments["SANDBOX_CODE_TOOL"] = sandbox_code_tool_id
     veadk_environments["VEADK_STUDIO_APPLICATION_NAME"] = vefaas_app_name
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
@@ -4093,6 +4173,12 @@ def frontend_deploy(
     default=None,
     help="Replace the reusable OpenClaw AgentKit Tool ID.",
 )
+@click.option(
+    "--sandbox-code-tool-id",
+    "sandbox_code_tool_id",
+    default=None,
+    help="Replace the reusable Code sandbox AgentKit Tool ID.",
+)
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
 def frontend_update(
@@ -4105,6 +4191,7 @@ def frontend_update(
     sandbox_chat_codex_tool_id: str | None,
     sandbox_skill_creator_tool_id: str | None,
     sandbox_openclaw_tool_id: str | None,
+    sandbox_code_tool_id: str | None,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
 ) -> None:
@@ -4212,6 +4299,8 @@ def frontend_update(
             environment_overrides["SANDBOX_OPENCLAW_TOOL"] = (
                 sandbox_openclaw_tool_id
             )
+        if sandbox_code_tool_id is not None:
+            environment_overrides["SANDBOX_CODE_TOOL"] = sandbox_code_tool_id
         url = service.update_application_code_bundle(
             application_id=target.application_id,
             function_id=target.function_id,

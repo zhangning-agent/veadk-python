@@ -462,6 +462,8 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
             str(tmp_path),
             "--sandbox-chat-codex-tool-id",
             "chat-tool-new",
+            "--sandbox-code-tool-id",
+            "code-tool-new",
             "--volcengine-access-key",
             "ak",
             "--volcengine-secret-key",
@@ -470,7 +472,10 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["environment_overrides"] == {"SANDBOX_CHAT_CODEX": "chat-tool-new"}
+    assert captured["environment_overrides"] == {
+        "SANDBOX_CHAT_CODEX": "chat-tool-new",
+        "SANDBOX_CODE_TOOL": "code-tool-new",
+    }
 
 
 def test_update_application_code_bundle_merges_only_explicit_environment(

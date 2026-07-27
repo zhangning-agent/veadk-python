@@ -16,25 +16,32 @@ const capabilitySource = readFileSync(
   "utf8",
 );
 
-test("loads temporary-session and Skill-creation capabilities independently", () => {
+test("loads temporary, branded-sandbox, and Skill capabilities independently", () => {
   assert.match(capabilitySource, /\/web\/sandbox\/capabilities/);
+  assert.match(capabilitySource, /\/web\/code\/capabilities/);
   assert.match(capabilitySource, /\/web\/skill-creator\/capabilities/);
   assert.match(capabilitySource, /export async function getSandboxCapability/);
+  assert.match(capabilitySource, /export async function getCodeSandboxCapability/);
   assert.match(capabilitySource, /export async function getSkillCreatorCapability/);
   assert.match(capabilitySource, /enabled:\s*boolean/);
   assert.match(appSource, /getSandboxCapability/);
+  assert.match(appSource, /getCodeSandboxCapability/);
   assert.match(appSource, /getSkillCreatorCapability/);
   assert.match(appSource, /Promise\.allSettled/);
   assert.match(appSource, /temporaryEnabled/);
+  assert.match(appSource, /codeSandboxEnabled/);
   assert.match(appSource, /skillCreateEnabled/);
 });
 
 test("disables only the unavailable mode and explains that an administrator must configure it", () => {
   assert.match(composerSource, /temporaryEnabled\?: boolean/);
+  assert.match(composerSource, /codeSandboxEnabled\?: boolean/);
   assert.match(composerSource, /skillCreateEnabled\?: boolean/);
   assert.match(composerSource, /temporaryEnabled=\{temporaryEnabled\}/);
+  assert.match(composerSource, /codeSandboxEnabled=\{codeSandboxEnabled\}/);
   assert.match(composerSource, /skillCreateEnabled=\{skillCreateEnabled\}/);
   assert.match(selectorSource, /temporaryEnabled\?: boolean/);
+  assert.match(selectorSource, /codeSandboxEnabled\?: boolean/);
   assert.match(selectorSource, /skillCreateEnabled\?: boolean/);
   assert.match(selectorSource, /管理员未配置/);
   assert.match(selectorSource, /if \(modeDisabled\(mode\)\) return/);

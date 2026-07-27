@@ -26,10 +26,9 @@ import re
 import secrets
 import shlex
 import time
-import uuid
 import urllib.error
 import urllib.request
-
+import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -48,6 +47,7 @@ STUDIO_SANDBOX_MAX_ACTIVE = 20
 _SANDBOX_CHAT_TOOL_ENV = "SANDBOX_CHAT_CODEX"
 _SANDBOX_OPENCLAW_TOOL_ENV = "SANDBOX_OPENCLAW_TOOL"
 _SANDBOX_HERMES_TOOL_ENV = "SANDBOX_HERMES_TOOL"
+_SANDBOX_CODE_TOOL_ENV = "SANDBOX_CODE_TOOL"
 _SANDBOX_MODEL_ENV_KEYS = (
     "ARK_BASE_URL",
     "MODEL_AGENT_API_KEY",
@@ -192,6 +192,7 @@ class SandboxConversation:
     thread_id: str | None = None
     openclaw_preview_url: str | None = None
     hermes_preview_url: str | None = None
+    code_preview_url: str | None = None
     proxy_token: str = field(default_factory=lambda: secrets.token_urlsafe(24))
     created_at: float = field(default_factory=time.time)
     expires_at: float = field(
@@ -245,6 +246,10 @@ class SandboxCloudGateway(Protocol):
 
     async def start_hermes(self, session: SandboxCloudSession) -> str:
         """Start Hermes and return a short-lived browser preview URL."""
+        raise NotImplementedError
+
+    async def start_code(self, session: SandboxCloudSession) -> str:
+        """Start the Code sandbox and return its Codex WebUI URL."""
         raise NotImplementedError
 
     def terminal_preview_url(self, session: SandboxCloudSession) -> str:
@@ -453,7 +458,7 @@ class AgentkitSandboxGateway:
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise SandboxProvisioningError("AgentKit 沙箱返回了无效 Endpoint。")
         prefix = parsed.path.rstrip("/")
-        for suffix in ("/openclaw", "/hermes", "/terminal"):
+        for suffix in ("/openclaw", "/hermes", "/codex", "/terminal"):
             if prefix.endswith(suffix):
                 prefix = prefix[: -len(suffix)]
                 break
@@ -492,6 +497,13 @@ class AgentkitSandboxGateway:
         return await self._wait_endpoint_ready(
             self._endpoint_url(session.endpoint, "hermes"),
             kind="Hermes",
+        )
+
+    async def start_code(self, session: SandboxCloudSession) -> str:
+        """Wait for the Code sandbox's Codex WebUI endpoint and return its URL."""
+        return await self._wait_endpoint_ready(
+            self._endpoint_url(session.endpoint, "codex"),
+            kind="Code Sandbox",
         )
 
     def terminal_preview_url(self, session: SandboxCloudSession) -> str:
@@ -776,6 +788,8 @@ class SandboxConversationService:
         openclaw_tool_resolver: Callable[[], str] | None = None,
         hermes_tool_id: str | None = None,
         hermes_tool_resolver: Callable[[], str] | None = None,
+        code_tool_id: str | None = None,
+        code_tool_resolver: Callable[[], str] | None = None,
     ) -> None:
         self._gateway = gateway
         self._configured_tool_id = (tool_id or "").strip()
@@ -785,6 +799,9 @@ class SandboxConversationService:
         self._configured_hermes_tool_id = (hermes_tool_id or "").strip()
         self._hermes_tool_resolver = hermes_tool_resolver
         self._hermes_tool_lock = asyncio.Lock()
+        self._configured_code_tool_id = (code_tool_id or "").strip()
+        self._code_tool_resolver = code_tool_resolver
+        self._code_tool_lock = asyncio.Lock()
         self._sessions: dict[str, SandboxConversation] = {}
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
@@ -804,6 +821,32 @@ class SandboxConversationService:
             configured["MODEL_AGENT_BASE_URL"] = configured["ARK_BASE_URL"]
         return configured
 
+    @staticmethod
+    def _code_model_env_overrides() -> dict[str, str]:
+        """Return model settings using the names consumed by the Code image."""
+        api_key = (
+            (os.getenv("CODEX_API_KEY") or "").strip()
+            or (os.getenv("MODEL_AGENT_API_KEY") or "").strip()
+        )
+        base_url = (
+            (os.getenv("CODEX_BASE_URL") or "").strip()
+            or (os.getenv("ARK_BASE_URL") or "").strip()
+            or (os.getenv("MODEL_AGENT_BASE_URL") or "").strip()
+        )
+        model = (
+            (os.getenv("CODEX_MODEL") or "").strip()
+            or (os.getenv("MODEL_AGENT_NAME") or "").strip()
+        )
+        return {
+            key: value
+            for key, value in {
+                "CODEX_API_KEY": api_key,
+                "CODEX_BASE_URL": base_url,
+                "CODEX_MODEL": model,
+            }.items()
+            if value
+        }
+
     def capabilities(self) -> dict[str, object]:
         """Report whether the dedicated temporary-chat Tool is configured."""
         enabled = bool(self._tool_id(required=False))
@@ -822,6 +865,14 @@ class SandboxConversationService:
         enabled = bool(
             self._hermes_tool_id(required=False)
             or self._hermes_tool_resolver is not None
+        )
+        return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
+
+    def code_capabilities(self) -> dict[str, object]:
+        """Report whether the Code sandbox can be resolved on demand."""
+        enabled = bool(
+            self._code_tool_id(required=False)
+            or self._code_tool_resolver is not None
         )
         return {"enabled": enabled, "reason": "" if enabled else "管理员未配置"}
 
@@ -847,6 +898,15 @@ class SandboxConversationService:
         tool_id = (
             self._configured_hermes_tool_id
             or (os.getenv(_SANDBOX_HERMES_TOOL_ENV) or "").strip()
+        )
+        if required and not tool_id:
+            raise SandboxConfigurationError("管理员未配置")
+        return tool_id
+
+    def _code_tool_id(self, *, required: bool = True) -> str:
+        tool_id = (
+            self._configured_code_tool_id
+            or (os.getenv(_SANDBOX_CODE_TOOL_ENV) or "").strip()
         )
         if required and not tool_id:
             raise SandboxConfigurationError("管理员未配置")
@@ -911,6 +971,35 @@ class SandboxConversationService:
                     "查找或创建 Hermes Tool 未返回 Tool ID。"
                 )
             self._configured_hermes_tool_id = tool_id
+            return tool_id
+
+    async def _resolve_code_tool_id(self) -> str:
+        """Resolve/reuse/create the Code sandbox Tool after user confirmation."""
+        tool_id = self._code_tool_id(required=False)
+        if tool_id:
+            return tool_id
+        if self._code_tool_resolver is None:
+            raise SandboxConfigurationError("管理员未配置")
+
+        async with self._code_tool_lock:
+            tool_id = self._code_tool_id(required=False)
+            if tool_id:
+                return tool_id
+            try:
+                resolved = await asyncio.to_thread(self._code_tool_resolver)
+            except SandboxError:
+                raise
+            except Exception as error:
+                raise SandboxProvisioningError(
+                    "查找或创建 Code 沙箱 Tool 失败："
+                    f"{_safe_error_message(error)}"
+                ) from error
+            tool_id = (resolved or "").strip()
+            if not tool_id:
+                raise SandboxProvisioningError(
+                    "查找或创建 Code 沙箱 Tool 未返回 Tool ID。"
+                )
+            self._configured_code_tool_id = tool_id
             return tool_id
 
     async def start(self, owner_id: str) -> SandboxConversation:
@@ -1092,6 +1181,82 @@ class SandboxConversationService:
                 self._sessions_starting -= 1
         return session, preview_url, terminal_url
 
+    async def start_code(
+        self, owner_id: str
+    ) -> tuple[SandboxConversation, str, str]:
+        """Resolve the reusable Code Tool on demand, then create one Session."""
+        dev_preview_url = os.environ.get("SANDBOX_CODE_DEV_URL", "").strip()
+
+        if dev_preview_url:
+            await self.cleanup_expired()
+            async with self._registry_lock:
+                if len(self._sessions) + self._sessions_starting >= (
+                    STUDIO_SANDBOX_MAX_ACTIVE
+                ):
+                    raise SandboxCapacityError("临时会话并发数已达上限，请稍后重试。")
+                self._sessions_starting += 1
+            try:
+                session = SandboxConversation(
+                    session_id=str(uuid.uuid4()),
+                    owner_id=owner_id,
+                    cloud=None,
+                    code_preview_url=dev_preview_url,
+                )
+                self._sessions[session.session_id] = session
+                terminal_url = (
+                    os.environ.get("SANDBOX_CODE_TERMINAL_URL", "").strip()
+                    or AgentkitSandboxGateway._sibling_endpoint_url(
+                        dev_preview_url, "terminal"
+                    )
+                )
+                return session, dev_preview_url, terminal_url
+            finally:
+                async with self._registry_lock:
+                    self._sessions_starting -= 1
+
+        cloud: SandboxCloudSession | None = None
+        tool_id = await self._resolve_code_tool_id()
+        await self.cleanup_expired()
+        async with self._registry_lock:
+            if len(self._sessions) + self._sessions_starting >= (
+                STUDIO_SANDBOX_MAX_ACTIVE
+            ):
+                raise SandboxCapacityError("临时会话并发数已达上限，请稍后重试。")
+            self._sessions_starting += 1
+        try:
+            cloud = await self._gateway.create_session(
+                tool_id, self._code_model_env_overrides()
+            )
+            session = SandboxConversation(
+                session_id=str(uuid.uuid4()),
+                owner_id=owner_id,
+                cloud=cloud,
+            )
+            self._sessions[session.session_id] = session
+            preview_url = await self._gateway.start_code(session.cloud)
+            terminal_url = self._gateway.terminal_preview_url(session.cloud)
+            session.code_preview_url = preview_url
+        except BaseException:
+            if cloud is not None:
+                self._sessions.pop(
+                    next(
+                        (
+                            sid
+                            for sid, candidate in self._sessions.items()
+                            if candidate.cloud is cloud
+                        ),
+                        "",
+                    ),
+                    None,
+                )
+                with contextlib.suppress(SandboxError):
+                    await asyncio.shield(self._gateway.delete_session(cloud))
+            raise
+        finally:
+            async with self._registry_lock:
+                self._sessions_starting -= 1
+        return session, preview_url, terminal_url
+
     def _owned(self, session_id: str, owner_id: str) -> SandboxConversation:
         session = self._sessions.get(session_id)
         if session is None or session.owner_id != owner_id:
@@ -1103,14 +1268,20 @@ class SandboxConversationService:
         self._owned(session_id, owner_id)
 
     def require_proxy_session(
-        self, session_id: str, proxy_token: str
+        self, session_id: str, proxy_token: str, kind: str = "openclaw"
     ) -> SandboxConversation:
         """Resolve a branded session from its unguessable WebUI proxy token."""
         session = self._sessions.get(session_id)
+        preview_url = (
+            session.code_preview_url
+            if session is not None and kind == "code"
+            else session.openclaw_preview_url if session is not None else None
+        )
         if (
             session is None
             or not secrets.compare_digest(session.proxy_token, proxy_token)
             or session.cloud is None
+            or not preview_url
         ):
             raise SandboxSessionNotFoundError("沙箱 WebUI 不存在或已过期。")
         return session
@@ -1205,6 +1376,12 @@ def mount_sandbox_routes(
             f"/proxy/{session.proxy_token}"
         )
 
+    def _code_proxy_prefix(session: SandboxConversation) -> str:
+        return (
+            f"/web/code/sessions/{session.session_id}"
+            f"/proxy/{session.proxy_token}"
+        )
+
     def _proxy_target_url(
         session: SandboxConversation,
         path: str,
@@ -1269,6 +1446,86 @@ def mount_sandbox_routes(
             ]
         )
         return urlunsplit(("", "", f"{prefix}{path}", safe_query, parsed.fragment))
+
+    def _rewrite_code_proxy_body(
+        body: bytes,
+        *,
+        content_type: str,
+        prefix: str,
+    ) -> bytes:
+        if not any(
+            marker in content_type
+            for marker in ("text/", "javascript", "json", "manifest", "xml")
+        ):
+            return body
+        replacements = {
+            b"/codex": f"{prefix}/codex".encode(),
+            b"/terminal": f"{prefix}/native/terminal".encode(),
+            b"/browser-ui": f"{prefix}/native/browser-ui".encode(),
+        }
+        for source, replacement in replacements.items():
+            for marker in (b'"', b"'", b"`"):
+                body = body.replace(marker + source, marker + replacement)
+        return body.replace(b"url(/codex", b"url(" + replacements[b"/codex"])
+
+    def _rewrite_code_proxy_cookie(cookie: str, prefix: str) -> str:
+        return re.sub(
+            r"(?i)(;\s*path=)/codex(?=/|;|$)",
+            rf"\1{prefix}/codex",
+            cookie,
+        )
+
+    def _rewrite_code_native_proxy_cookie(cookie: str, prefix: str) -> str:
+        return re.sub(
+            r"(?i)(;\s*path=)(/[^;]*)",
+            lambda match: f"{match.group(1)}{prefix}/native{match.group(2)}",
+            cookie,
+        )
+
+    def _code_proxy_upstream_path(path: str) -> tuple[str, bool]:
+        if path == "native":
+            return "", True
+        if path.startswith("native/"):
+            return path.removeprefix("native/"), True
+        return path, False
+
+    def _without_gateway_query(value: str) -> str:
+        parsed = urlsplit(value)
+        if not parsed.query:
+            return value
+        safe_query = urlencode(
+            [
+                (key, item)
+                for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+                if key.lower() not in {"authorization", "faasinstancename"}
+            ]
+        )
+        return urlunsplit(
+            (parsed.scheme, parsed.netloc, parsed.path, safe_query, parsed.fragment)
+        )
+
+    def _sanitize_code_native_json(body: bytes, content_type: str) -> bytes:
+        if "json" not in content_type:
+            return body
+        try:
+            payload = json.loads(body)
+        except (TypeError, ValueError, UnicodeDecodeError):
+            return body
+
+        def _sanitize(value: object) -> object:
+            if isinstance(value, dict):
+                return {key: _sanitize(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [_sanitize(item) for item in value]
+            if isinstance(value, str):
+                return _without_gateway_query(value)
+            return value
+
+        return json.dumps(
+            _sanitize(payload),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
 
     @app.api_route(
         "/web/openclaw/sessions/{session_id}/proxy/{proxy_token}/{path:path}",
@@ -1452,6 +1709,249 @@ def mount_sandbox_routes(
             with contextlib.suppress(RuntimeError):
                 await websocket.close(code=1011)
 
+    @app.api_route(
+        "/web/code/sessions/{session_id}/proxy/{proxy_token}/{path:path}",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    )
+    async def _proxy_code_webui(
+        session_id: str,
+        proxy_token: str,
+        path: str,
+        request: Request,
+    ) -> Response:
+        import httpx
+
+        try:
+            session = service.require_proxy_session(
+                session_id, proxy_token, kind="code"
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        prefix = _code_proxy_prefix(session)
+        upstream_path, native_request = _code_proxy_upstream_path(path)
+        target_url = _proxy_target_url(
+            session, upstream_path, request.url.query
+        )
+        target = urlsplit(target_url)
+        forwarded_headers = {
+            key: value
+            for key, value in request.headers.items()
+            if key.lower()
+            in {
+                "accept",
+                "accept-language",
+                "cache-control",
+                "content-type",
+                "cookie",
+                "if-none-match",
+                "if-modified-since",
+                "last-event-id",
+                "user-agent",
+            }
+        }
+        forwarded_headers["origin"] = f"{target.scheme}://{target.netloc}"
+        if native_request:
+            forwarded_headers.pop("cookie", None)
+            public_proto = (
+                request.headers.get("x-forwarded-proto", "")
+                .split(",", 1)[0]
+                .strip()
+                .lower()
+            )
+            if public_proto not in {"http", "https"}:
+                public_proto = request.url.scheme
+            forwarded_headers["x-forwarded-host"] = (
+                request.headers.get("x-forwarded-host")
+                or request.headers.get("host")
+                or request.url.netloc
+            ).split(",", 1)[0].strip()
+            forwarded_headers["x-forwarded-proto"] = public_proto
+            forwarded_headers["x-forwarded-prefix"] = f"{prefix}/native"
+        client = httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=httpx.Timeout(60, read=None),
+        )
+        try:
+            upstream_request = client.build_request(
+                request.method,
+                target_url,
+                headers=forwarded_headers,
+                content=await request.body(),
+            )
+            upstream = await client.send(upstream_request, stream=True)
+        except httpx.HTTPError as error:
+            await client.aclose()
+            raise _http_error(
+                SandboxProvisioningError(
+                    f"连接 Code 沙箱 WebUI 失败：{_safe_error_message(error)}"
+                )
+            ) from error
+
+        blocked_headers = {
+            "connection",
+            "content-encoding",
+            "content-length",
+            "content-security-policy",
+            "keep-alive",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "trailer",
+            "transfer-encoding",
+            "upgrade",
+            "x-frame-options",
+        }
+        response_headers = {
+            key: value
+            for key, value in upstream.headers.items()
+            if key.lower() not in blocked_headers
+        }
+        upstream_csp = upstream.headers.get("content-security-policy", "")
+        if upstream_csp:
+            response_headers["content-security-policy"] = re.sub(
+                r"frame-ancestors\s+[^;]+",
+                "frame-ancestors 'self'",
+                upstream_csp,
+                flags=re.IGNORECASE,
+            )
+        if "location" in response_headers:
+            response_headers["location"] = _rewrite_proxy_location(
+                response_headers["location"],
+                f"{prefix}/native" if native_request else prefix,
+            )
+        if "set-cookie" in response_headers:
+            cookie = response_headers["set-cookie"]
+            response_headers["set-cookie"] = (
+                _rewrite_code_native_proxy_cookie(cookie, prefix)
+                if native_request
+                else _rewrite_code_proxy_cookie(cookie, prefix)
+            )
+
+        content_type = upstream.headers.get("content-type", "")
+        if "text/event-stream" in content_type:
+
+            async def _stream_upstream() -> AsyncIterator[bytes]:
+                try:
+                    async for chunk in upstream.aiter_bytes():
+                        yield chunk
+                finally:
+                    await upstream.aclose()
+                    await client.aclose()
+
+            return StreamingResponse(
+                _stream_upstream(),
+                status_code=upstream.status_code,
+                headers=response_headers,
+                media_type=None,
+            )
+
+        try:
+            body = await upstream.aread()
+            if native_request:
+                body = _sanitize_code_native_json(body, content_type)
+            else:
+                body = _rewrite_code_proxy_body(
+                    body,
+                    content_type=content_type,
+                    prefix=prefix,
+                )
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+        return Response(
+            content=body,
+            status_code=upstream.status_code,
+            headers=response_headers,
+            media_type=None,
+        )
+
+    @app.websocket(
+        "/web/code/sessions/{session_id}/proxy/{proxy_token}/{path:path}"
+    )
+    async def _proxy_code_websocket(
+        websocket: WebSocket,
+        session_id: str,
+        proxy_token: str,
+        path: str,
+    ) -> None:
+        import websockets
+
+        try:
+            session = service.require_proxy_session(
+                session_id, proxy_token, kind="code"
+            )
+        except SandboxError:
+            await websocket.close(code=4404)
+            return
+        upstream_path, native_request = _code_proxy_upstream_path(path)
+        if not native_request:
+            await websocket.close(code=4404)
+            return
+        target_http_url = _proxy_target_url(
+            session, upstream_path, websocket.url.query
+        )
+        parsed = urlsplit(target_http_url)
+        target_ws_url = urlunsplit(
+            (
+                "wss" if parsed.scheme == "https" else "ws",
+                parsed.netloc,
+                parsed.path,
+                parsed.query,
+                "",
+            )
+        )
+        requested_protocols = [
+            item.strip()
+            for item in websocket.headers.get(
+                "sec-websocket-protocol", ""
+            ).split(",")
+            if item.strip()
+        ]
+        try:
+            async with websockets.connect(
+                target_ws_url,
+                origin=f"{parsed.scheme}://{parsed.netloc}",
+                subprotocols=requested_protocols or None,
+                max_size=None,
+            ) as upstream:
+                await websocket.accept(subprotocol=upstream.subprotocol)
+
+                async def _to_upstream() -> None:
+                    while True:
+                        message = await websocket.receive()
+                        if message["type"] == "websocket.disconnect":
+                            return
+                        payload = message.get("text")
+                        if payload is None:
+                            payload = message.get("bytes")
+                        if payload is not None:
+                            await upstream.send(payload)
+
+                async def _to_browser() -> None:
+                    async for payload in upstream:
+                        if isinstance(payload, bytes):
+                            await websocket.send_bytes(payload)
+                        else:
+                            await websocket.send_text(payload)
+
+                browser_task = asyncio.create_task(_to_upstream())
+                upstream_task = asyncio.create_task(_to_browser())
+                done, pending = await asyncio.wait(
+                    {browser_task, upstream_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*done, *pending, return_exceptions=True)
+        except WebSocketDisconnect:
+            return
+        except Exception as error:
+            logger.warning(
+                "Code sandbox native WebSocket proxy failed: %s",
+                _safe_error_message(error),
+            )
+            with contextlib.suppress(RuntimeError):
+                await websocket.close(code=1011)
+
     @app.get("/web/sandbox/capabilities")
     async def _sandbox_capabilities(request: Request) -> dict[str, object]:
         owner_resolver(request)
@@ -1466,6 +1966,11 @@ def mount_sandbox_routes(
     async def _hermes_capabilities(request: Request) -> dict[str, object]:
         owner_resolver(request)
         return service.hermes_capabilities()
+
+    @app.get("/web/code/capabilities")
+    async def _code_capabilities(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        return service.code_capabilities()
 
     @app.post("/web/sandbox/sessions")
     async def _start_sandbox_session(request: Request) -> dict[str, str]:
@@ -1516,6 +2021,35 @@ def mount_sandbox_routes(
             "status": "ready",
             "previewUrl": preview_url,
             "webuiUrl": preview_url,
+            "terminalUrl": terminal_url,
+            "createdAt": session.created_at,
+            "expiresAt": session.created_at + STUDIO_SANDBOX_TTL_SECONDS,
+            "ttlSeconds": STUDIO_SANDBOX_TTL_SECONDS,
+        }
+
+    @app.post("/web/code/sessions")
+    async def _start_code_session(request: Request) -> dict[str, object]:
+        try:
+            session, preview_url, terminal_url = await service.start_code(
+                owner_resolver(request)
+            )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        webui_url = preview_url
+        if session.cloud is not None:
+            proxy_prefix = _code_proxy_prefix(session)
+            webui_url = f"{proxy_prefix}/codex/"
+            terminal_url = f"{proxy_prefix}/native/terminal"
+        return {
+            "sessionId": session.session_id,
+            "sandboxId": (
+                session.cloud.instance_id
+                if session.cloud
+                else f"dev-{session.session_id[:8]}"
+            ),
+            "status": "ready",
+            "previewUrl": webui_url,
+            "webuiUrl": webui_url,
             "terminalUrl": terminal_url,
             "createdAt": session.created_at,
             "expiresAt": session.created_at + STUDIO_SANDBOX_TTL_SECONDS,
@@ -1605,6 +2139,16 @@ def mount_sandbox_routes(
 
     @app.delete("/web/hermes/sessions/{session_id}")
     async def _delete_hermes_session(
+        session_id: str, request: Request
+    ) -> dict[str, bool]:
+        try:
+            await service.close(session_id, owner_resolver(request))
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {"deleted": True}
+
+    @app.delete("/web/code/sessions/{session_id}")
+    async def _delete_code_session(
         session_id: str, request: Request
     ) -> dict[str, bool]:
         try:

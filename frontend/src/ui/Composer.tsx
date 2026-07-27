@@ -64,6 +64,7 @@ export interface ComposerProps {
   temporaryEnabled?: boolean;
   openclawEnabled?: boolean;
   hermesEnabled?: boolean;
+  codeSandboxEnabled?: boolean;
   skillCreateEnabled?: boolean;
 }
 
@@ -94,6 +95,7 @@ export function Composer({
   temporaryEnabled,
   openclawEnabled,
   hermesEnabled,
+  codeSandboxEnabled,
   skillCreateEnabled,
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -391,6 +393,7 @@ export function Composer({
             temporaryEnabled={temporaryEnabled}
             openclawEnabled={openclawEnabled}
             hermesEnabled={hermesEnabled}
+            codeSandboxEnabled={codeSandboxEnabled}
             skillCreateEnabled={skillCreateEnabled}
           />
         ) : null}

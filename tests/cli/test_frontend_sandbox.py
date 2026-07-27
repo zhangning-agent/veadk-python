@@ -19,12 +19,11 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
-
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
@@ -102,6 +101,9 @@ class _FakeGateway:
     async def start_hermes(self, session: SandboxCloudSession) -> str:
         return "https://sandbox.example/hermes?ticket=preview"
 
+    async def start_code(self, session: SandboxCloudSession) -> str:
+        return "https://sandbox.example/codex?ticket=preview"
+
     def terminal_preview_url(self, session: SandboxCloudSession) -> str:
         return "https://sandbox.example/terminal?ticket=preview"
 
@@ -111,6 +113,7 @@ def _app(
     tool_id: str | None = "tool-studio",
     openclaw_tool_resolver=None,
     hermes_tool_resolver=None,
+    code_tool_resolver=None,
 ) -> FastAPI:
     app = FastAPI()
     service = SandboxConversationService(
@@ -120,6 +123,8 @@ def _app(
         openclaw_tool_resolver=openclaw_tool_resolver,
         hermes_tool_id=tool_id,
         hermes_tool_resolver=hermes_tool_resolver,
+        code_tool_id=tool_id,
+        code_tool_resolver=code_tool_resolver,
     )
 
     def _owner(request: Request) -> str:
@@ -184,6 +189,10 @@ def test_openclaw_endpoint_uses_the_image_proxy_path() -> None:
     )
     assert AgentkitSandboxGateway._endpoint_url(endpoint, "terminal") == (
         "https://sandbox.example/terminal"
+        "?faasInstanceName=instance&Authorization=secret"
+    )
+    assert AgentkitSandboxGateway._endpoint_url(endpoint, "codex") == (
+        "https://sandbox.example/codex"
         "?faasInstanceName=instance&Authorization=secret"
     )
     assert AgentkitSandboxGateway._sibling_endpoint_url(
@@ -297,12 +306,261 @@ def test_hermes_routes_create_report_lifecycle_and_delete() -> None:
         assert deleted.json() == {"deleted": True}
 
 
-def test_openclaw_and_hermes_sessions_override_tool_model_envs(
+def test_code_routes_proxy_codex_cookie_and_sse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    proxied_urls: list[str] = []
+    event_cookies: list[str] = []
+    native_forwarded_headers: list[dict[str, str]] = []
+
+    class _Upstream:
+        def __init__(
+            self,
+            *,
+            content: bytes,
+            content_type: str,
+            headers: dict[str, str] | None = None,
+        ) -> None:
+            self.status_code = 200
+            self._content = content
+            self.headers = {"content-type": content_type, **(headers or {})}
+
+        async def aread(self) -> bytes:
+            return self._content
+
+        async def aiter_bytes(self):
+            yield self._content
+
+        async def aclose(self) -> None:
+            return None
+
+    async def _send(
+        self: object,
+        request: object,
+        *,
+        stream: bool = False,
+    ) -> _Upstream:
+        del self, stream
+        url = str(request.url)
+        proxied_urls.append(url)
+        request_path = urlsplit(url).path
+        if urlsplit(url).path.endswith("/events"):
+            event_cookies.append(request.headers.get("cookie", ""))
+            return _Upstream(
+                content=b"event: message\ndata: {}\n\n",
+                content_type="text/event-stream",
+            )
+        if urlsplit(url).path.endswith("/capability"):
+            return _Upstream(
+                content=b'{"ok":true}',
+                content_type="application/json",
+                headers={
+                    "set-cookie": (
+                        "agentkit_codex_web_capability=token; "
+                        "Path=/codex/api; HttpOnly; SameSite=Strict"
+                    )
+                },
+            )
+        if request_path.endswith("/terminal"):
+            native_forwarded_headers.append(dict(request.headers))
+            return _Upstream(
+                content=(
+                    b"<html><head></head><body>"
+                    b"<script>new URL('v1/shell/ws', window.location.href)</script>"
+                    b"</body></html>"
+                ),
+                content_type="text/html; charset=utf-8",
+                headers={
+                    "x-frame-options": "SAMEORIGIN",
+                    "content-security-policy": "frame-ancestors 'none'",
+                },
+            )
+        if request_path.endswith("/browser-ui"):
+            native_forwarded_headers.append(dict(request.headers))
+            return _Upstream(
+                content=b"<html><body>Browser UI</body></html>",
+                content_type="text/html; charset=utf-8",
+                headers={"x-frame-options": "DENY"},
+            )
+        if request_path.endswith("/v1/browser/info"):
+            native_forwarded_headers.append(dict(request.headers))
+            return _Upstream(
+                content=(
+                    b'{"data":{"cdp_url":"wss://testserver/web/code/native/cdp/'
+                    b'devtools/page/1?view=main&Authorization=must-not-leak'
+                    b'&faasInstanceName=instance"}}'
+                ),
+                content_type="application/json",
+            )
+        if "/static/" in request_path:
+            native_forwarded_headers.append(dict(request.headers))
+            return _Upstream(
+                content=b"body{background:#111}",
+                content_type="text/css",
+            )
+        return _Upstream(
+            content=(
+                b'<script src="/codex/assets/app.js"></script>'
+                b'<script>const terminal="/terminal";'
+                b'const browser="/browser-ui";</script>'
+            ),
+            content_type="text/html; charset=utf-8",
+            headers={"x-frame-options": "DENY"},
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", _send)
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway)) as client:
+        created = client.post(
+            "/web/code/sessions", headers={"X-Test-User": "alice"}
+        )
+        assert created.status_code == 200
+        payload = created.json()
+        assert payload["status"] == "ready"
+        assert payload["sandboxId"] == "remote-1"
+        assert payload["webuiUrl"].startswith(
+            f"/web/code/sessions/{payload['sessionId']}/proxy/"
+        )
+        assert payload["webuiUrl"].endswith("/codex/")
+        assert payload["terminalUrl"].startswith(
+            f"/web/code/sessions/{payload['sessionId']}/proxy/"
+        )
+        assert payload["terminalUrl"].endswith("/native/terminal")
+        assert payload["expiresAt"] - payload["createdAt"] == 3600
+
+        proxied = client.get(payload["webuiUrl"])
+        assert proxied.status_code == 200
+        assert "x-frame-options" not in proxied.headers
+        proxy_prefix = payload["webuiUrl"].removesuffix("/codex/")
+        assert f'{proxy_prefix}/codex/assets/app.js' in proxied.text
+        assert f'const terminal="{proxy_prefix}/native/terminal"' in proxied.text
+        assert f'const browser="{proxy_prefix}/native/browser-ui"' in proxied.text
+
+        terminal = client.get(f"{proxy_prefix}/native/terminal")
+        assert terminal.status_code == 200
+        assert "x-frame-options" not in terminal.headers
+        assert (
+            terminal.headers["content-security-policy"]
+            == "frame-ancestors 'self'"
+        )
+        assert "new URL('v1/shell/ws'" in terminal.text
+
+        terminal_asset = client.get(
+            f"{proxy_prefix}/native/static/sandbox/xterm.css"
+        )
+        assert terminal_asset.status_code == 200
+        assert terminal_asset.text == "body{background:#111}"
+
+        browser = client.get(f"{proxy_prefix}/native/browser-ui")
+        assert browser.status_code == 200
+        assert "x-frame-options" not in browser.headers
+
+        browser_info = client.get(
+            f"{proxy_prefix}/native/v1/browser/info?view=main"
+        )
+        assert browser_info.status_code == 200
+        cdp_url = browser_info.json()["data"]["cdp_url"]
+        assert "view=main" in cdp_url
+        assert "Authorization" not in cdp_url
+        assert "faasInstanceName" not in cdp_url
+
+        assert native_forwarded_headers
+        assert all(
+            headers["x-forwarded-prefix"] == f"{proxy_prefix}/native"
+            for headers in native_forwarded_headers
+        )
+        assert all(
+            headers["x-forwarded-host"] == "testserver"
+            for headers in native_forwarded_headers
+        )
+        assert all("cookie" not in headers for headers in native_forwarded_headers)
+
+        capability = client.get(f"{proxy_prefix}/codex/api/capability")
+        assert capability.status_code == 200
+        assert f"Path={proxy_prefix}/codex/api" in capability.headers["set-cookie"]
+
+        events = client.get(f"{proxy_prefix}/codex/api/sessions/bridge/events")
+        assert events.status_code == 200
+        assert events.text == "event: message\ndata: {}\n\n"
+
+        deleted = client.delete(
+            f"/web/code/sessions/{payload['sessionId']}",
+            headers={"X-Test-User": "alice"},
+        )
+        assert deleted.json() == {"deleted": True}
+
+    assert all("Authorization=secret" in url for url in proxied_urls)
+    assert event_cookies == ["agentkit_codex_web_capability=token"]
+
+
+def test_code_native_websocket_stays_in_the_session_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import websockets
+
+    connected: dict[str, object] = {}
+
+    class _Upstream:
+        subprotocol = None
+
+        async def __aenter__(self) -> "_Upstream":
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def send(self, payload: object) -> None:
+            connected["payload"] = payload
+
+        def __aiter__(self) -> "_Upstream":
+            return self
+
+        async def __anext__(self) -> str:
+            if connected.get("yielded"):
+                raise StopAsyncIteration
+            connected["yielded"] = True
+            return "native-ready"
+
+    def _connect(url: str, **kwargs: object) -> _Upstream:
+        connected["url"] = url
+        connected["kwargs"] = kwargs
+        return _Upstream()
+
+    monkeypatch.setattr(websockets, "connect", _connect)
+    with TestClient(_app(_FakeGateway())) as client:
+        created = client.post(
+            "/web/code/sessions", headers={"X-Test-User": "alice"}
+        )
+        payload = created.json()
+        proxy_prefix = payload["webuiUrl"].removesuffix("/codex/")
+        with client.websocket_connect(
+            f"{proxy_prefix}/native/v1/shell/ws?session_id=shell-1",
+            headers={"cookie": "native-session=token"},
+        ) as websocket:
+            assert websocket.receive_text() == "native-ready"
+
+    target = urlsplit(str(connected["url"]))
+    assert target.path.endswith("/v1/shell/ws")
+    assert dict(parse_qsl(target.query)) == {
+        "session_id": "shell-1",
+        "Authorization": "secret",
+    }
+    kwargs = connected["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert "additional_headers" not in kwargs
+
+
+def test_branded_sessions_override_tool_model_envs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ARK_BASE_URL", "https://ark.example/api/v3")
     monkeypatch.setenv("MODEL_AGENT_API_KEY", "configured-model-secret")
     monkeypatch.setenv("MODEL_AGENT_NAME", "configured-model")
+    monkeypatch.setenv("CODEX_API_KEY", "configured-codex-secret")
+    monkeypatch.setenv("CODEX_BASE_URL", "https://codex.example/api/v3")
+    monkeypatch.setenv("CODEX_MODEL", "configured-codex-model")
     gateway = _FakeGateway()
 
     with TestClient(_app(gateway)) as client:
@@ -312,16 +570,28 @@ def test_openclaw_and_hermes_sessions_override_tool_model_envs(
         hermes = client.post(
             "/web/hermes/sessions", headers={"X-Test-User": "alice"}
         )
+        code = client.post(
+            "/web/code/sessions", headers={"X-Test-User": "alice"}
+        )
 
     assert openclaw.status_code == 200
     assert hermes.status_code == 200
+    assert code.status_code == 200
     expected = {
         "ARK_BASE_URL": "https://ark.example/api/v3",
         "MODEL_AGENT_BASE_URL": "https://ark.example/api/v3",
         "MODEL_AGENT_API_KEY": "configured-model-secret",
         "MODEL_AGENT_NAME": "configured-model",
     }
-    assert gateway.session_envs == [expected, expected]
+    assert gateway.session_envs == [
+        expected,
+        expected,
+        {
+            "CODEX_API_KEY": "configured-codex-secret",
+            "CODEX_BASE_URL": "https://codex.example/api/v3",
+            "CODEX_MODEL": "configured-codex-model",
+        },
+    ]
 
 
 def test_openclaw_tool_is_resolved_only_after_user_starts_session(
@@ -363,6 +633,43 @@ def test_openclaw_tool_is_resolved_only_after_user_starts_session(
         "tool-resolved-on-click",
         "tool-resolved-on-click",
     ]
+
+
+def test_code_tool_is_resolved_only_after_user_starts_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SANDBOX_CODE_TOOL", raising=False)
+    resolved = 0
+
+    def _resolve() -> str:
+        nonlocal resolved
+        resolved += 1
+        return "tool-code-on-click"
+
+    gateway = _FakeGateway()
+    with TestClient(
+        _app(gateway, tool_id=None, code_tool_resolver=_resolve)
+    ) as client:
+        capability = client.get(
+            "/web/code/capabilities",
+            headers={"X-Test-User": "alice"},
+        )
+        assert capability.json() == {"enabled": True, "reason": ""}
+        assert resolved == 0
+
+        first = client.post(
+            "/web/code/sessions",
+            headers={"X-Test-User": "alice"},
+        )
+        second = client.post(
+            "/web/code/sessions",
+            headers={"X-Test-User": "bob"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert resolved == 1
+    assert gateway.tool_ids == ["tool-code-on-click", "tool-code-on-click"]
 
 
 def test_sandbox_capabilities_report_admin_not_configured(
