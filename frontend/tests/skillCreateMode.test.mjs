@@ -40,7 +40,7 @@ test("offers Agent, temporary Sandbox, and Skill creation modes in the new-chat 
   assert.match(selectorSource, /value: "agent"[\s\S]*?label: "Agent"/);
   assert.match(selectorSource, /value: "temporary"[\s\S]*?AgentKit 沙箱/);
   assert.match(selectorSource, /value: "skill-create"[\s\S]*?label: "创建 Skill"/);
-  assert.match(selectorSource, /aria-haspopup="listbox"/);
+  assert.match(selectorSource, /aria-haspopup="menu"/);
   assert.match(composerSource, /<NewChatModeSelector/);
   assert.match(composerSource, /SKILL_MODELS\.join\(" 和 "\)/);
   assert.match(composerSource, /描述你想创建的 Skill.*并行创建/);

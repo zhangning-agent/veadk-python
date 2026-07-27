@@ -19,6 +19,16 @@ server that `veadk frontend` launches — no separate backend.
   progress resumes from Sandbox state if the creation stream is interrupted;
   completed candidates can be compared, downloaded as ZIP files, and added to
   AgentKit.
+- **Agent sandboxes**: choose OpenClaw or Hermes from the nested Agent Sandbox
+  menu. Each product starts in its WebUI (`/openclaw` or `/hermes`) and exposes
+  a separate `/terminal` view through the top-right WebUI/Terminal tabs.
+  Sandboxes can coexist, minimize without being destroyed, and reopen from
+  their branded lifecycle cards. If configured, `ARK_BASE_URL`,
+  `MODEL_AGENT_API_KEY`, and `MODEL_AGENT_NAME` override the sandbox model
+  configuration and are forwarded by the Studio server. OpenClaw WebUI is
+  embedded through a session-scoped reverse proxy because its upstream
+  security headers disallow framing; the proxy token and upstream credentials
+  stay server-side.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Built-in tool activity** gives web search, image/video generation, memory,
   and knowledge-base retrieval their own repository-drawn icons and concise

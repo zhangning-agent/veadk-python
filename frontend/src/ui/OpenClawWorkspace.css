@@ -48,6 +48,13 @@
   color: hsl(var(--foreground));
   box-shadow: 0 1px 2px hsl(var(--foreground) / .08);
 }
+.openclaw-workspace__views button:focus-visible,
+.openclaw-workspace__actions a:focus-visible,
+.openclaw-workspace__actions button:focus-visible,
+.openclaw-lifecycle button:focus-visible {
+  outline: 2px solid hsl(var(--primary) / .42);
+  outline-offset: 1px;
+}
 .openclaw-workspace__actions { display: flex; align-items: center; gap: 4px; }
 .openclaw-workspace__actions a,
 .openclaw-workspace__actions button {
@@ -133,6 +140,12 @@
 .openclaw-lifecycle__open:hover { background: hsl(var(--accent)); }
 
 @media (max-width: 720px) {
+  .openclaw-workspace__header { padding-inline: 10px; }
+  .openclaw-workspace__sandbox { display: none; }
   .openclaw-workspace__views button { padding: 0 6px; }
   .openclaw-workspace__views button svg { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .openclaw-workspace__loading .spin { animation: none; }
 }

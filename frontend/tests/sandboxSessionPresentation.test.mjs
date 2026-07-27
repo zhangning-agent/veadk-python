@@ -50,6 +50,10 @@ const sandboxBrandSource = readFileSync(
   new URL("../src/ui/SandboxBrandIcon.tsx", import.meta.url),
   "utf8",
 );
+const workspaceIconsSource = readFileSync(
+  new URL("../src/ui/icons/SandboxWorkspaceIcons.tsx", import.meta.url),
+  "utf8",
+);
 
 test("sandbox access is isolated behind a reusable typed client", () => {
   assert.match(sandboxClientSource, /export interface AgentKitSandboxClient/);
@@ -124,6 +128,19 @@ test("OpenClaw and Hermes use official local brand marks", () => {
   assert.doesNotMatch(sandboxBrandSource, /https?:\/\//);
 });
 
+test("sandbox workspaces use repository-owned accessible controls", () => {
+  assert.doesNotMatch(openClawWorkspaceSource, /lucide-react/);
+  assert.doesNotMatch(hermesWorkspaceSource, /lucide-react/);
+  assert.doesNotMatch(workspaceIconsSource, /lucide-react|<img|https?:\/\//);
+  assert.match(workspaceIconsSource, /stroke="currentColor"/);
+  assert.match(workspaceIconsSource, /aria-hidden="true"/);
+  assert.match(workspaceIconsSource, /export function SandboxTerminalIcon/);
+  assert.match(openClawWorkspaceSource, /event\.key !== "ArrowLeft"/);
+  assert.match(hermesWorkspaceSource, /event\.key !== "ArrowLeft"/);
+  assert.match(openClawWorkspaceSource, /tabIndex=\{view === "webui" \? 0 : -1\}/);
+  assert.match(hermesWorkspaceSource, /tabIndex=\{view === "terminal" \? 0 : -1\}/);
+});
+
 test("sandbox lifecycle cards show brand identity instead of internal ids", () => {
   assert.match(
     openClawWorkspaceSource,
@@ -140,6 +157,10 @@ test("sandbox lifecycle cards show brand identity instead of internal ids", () =
 test("Agent sandboxes are grouped under an OpenClaw and Hermes submenu", () => {
   assert.match(modeSelectorSource, />Agent 沙箱</);
   assert.match(modeSelectorSource, /aria-label="Agent 沙箱"/);
+  assert.match(modeSelectorSource, /role="menuitem"/);
+  assert.match(modeSelectorSource, /role="menuitemradio"/);
+  assert.match(modeSelectorSource, /TOP_LEVEL_ENTRIES[\s\S]*kind: "sandbox"/);
+  assert.match(modeSelectorSource, /event\.key === "ArrowRight"/);
   assert.match(
     modeSelectorSource,
     /SANDBOX_MODES\.map\(\(sandboxMode\)[\s\S]*choose\(sandboxMode\)/,

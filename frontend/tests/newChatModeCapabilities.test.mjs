@@ -38,7 +38,8 @@ test("disables only the unavailable mode and explains that an administrator must
   assert.match(selectorSource, /skillCreateEnabled\?: boolean/);
   assert.match(selectorSource, /管理员未配置/);
   assert.match(selectorSource, /if \(modeDisabled\(mode\)\) return/);
-  assert.match(selectorSource, /disabled=\{modeDisabled\(mode\)\}/);
+  assert.match(selectorSource, /disabled=\{modeDisabled\(entry\.mode\)\}/);
+  assert.match(selectorSource, /disabled=\{modeDisabled\(sandboxMode\)\}/);
   assert.doesNotMatch(selectorSource, /value:\s*"agent"[\s\S]*?disabled:\s*true/);
 });
 

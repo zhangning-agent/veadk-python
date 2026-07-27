@@ -48,6 +48,13 @@
   color: hsl(var(--foreground));
   box-shadow: 0 1px 2px hsl(var(--foreground) / .08);
 }
+.hermes-workspace__views button:focus-visible,
+.hermes-workspace__actions a:focus-visible,
+.hermes-workspace__actions button:focus-visible,
+.hermes-lifecycle button:focus-visible {
+  outline: 2px solid hsl(var(--primary) / .42);
+  outline-offset: 1px;
+}
 .hermes-workspace__actions { display: flex; align-items: center; gap: 4px; }
 .hermes-workspace__actions a,
 .hermes-workspace__actions button {
@@ -133,6 +140,12 @@
 .hermes-lifecycle__open:hover { background: hsl(var(--accent)); }
 
 @media (max-width: 720px) {
+  .hermes-workspace__header { padding-inline: 10px; }
+  .hermes-workspace__sandbox { display: none; }
   .hermes-workspace__views button { padding: 0 6px; }
   .hermes-workspace__views button svg { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hermes-workspace__loading .spin { animation: none; }
 }

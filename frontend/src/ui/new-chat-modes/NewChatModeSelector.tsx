@@ -37,12 +37,18 @@ const MODES: ModeOption[] = [
     description: "使用两个模型生成并对比 Skill",
   },
 ];
-const TOP_LEVEL_MODES = MODES.filter(
-  (mode) => mode.value !== "openclaw" && mode.value !== "hermes",
-);
 const SANDBOX_MODES = MODES.filter(
   (mode) => mode.value === "openclaw" || mode.value === "hermes",
 );
+type MenuEntry =
+  | { kind: "mode"; mode: ModeOption }
+  | { kind: "sandbox" };
+const TOP_LEVEL_ENTRIES: MenuEntry[] = [
+  { kind: "mode", mode: MODES[0] },
+  { kind: "mode", mode: MODES[1] },
+  { kind: "sandbox" },
+  { kind: "mode", mode: MODES[4] },
+];
 
 export interface NewChatModeSelectorProps {
   value: NewChatMode;
@@ -93,7 +99,14 @@ export function NewChatModeSelector({
   const [open, setOpen] = useState(false);
   const [sandboxSubmenuOpen, setSandboxSubmenuOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(() =>
-    Math.max(0, TOP_LEVEL_MODES.findIndex((mode) => mode.value === value)),
+    Math.max(
+      0,
+      TOP_LEVEL_ENTRIES.findIndex((entry) =>
+        entry.kind === "sandbox"
+          ? value === "openclaw" || value === "hermes"
+          : entry.mode.value === value,
+      ),
+    ),
   );
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -130,9 +143,14 @@ export function NewChatModeSelector({
   function moveActive(delta: number) {
     let next = activeIndex;
     do {
-      next = (next + delta + TOP_LEVEL_MODES.length) % TOP_LEVEL_MODES.length;
-    } while (modeDisabled(TOP_LEVEL_MODES[next]));
+      next = (next + delta + TOP_LEVEL_ENTRIES.length) % TOP_LEVEL_ENTRIES.length;
+    } while (entryDisabled(TOP_LEVEL_ENTRIES[next]));
     setActiveIndex(next);
+  }
+
+  function entryDisabled(entry: MenuEntry): boolean {
+    if (entry.kind === "mode") return modeDisabled(entry.mode);
+    return openclawEnabled !== true && hermesEnabled !== true;
   }
 
   function choose(mode: ModeOption) {
@@ -143,6 +161,15 @@ export function NewChatModeSelector({
     triggerRef.current?.focus();
   }
 
+  function activateEntry(entry: MenuEntry) {
+    if (entryDisabled(entry)) return;
+    if (entry.kind === "sandbox") {
+      setSandboxSubmenuOpen((currentOpen) => !currentOpen);
+      return;
+    }
+    choose(entry.mode);
+  }
+
   return (
     <div className="new-chat-mode" ref={rootRef}>
       <button
@@ -150,12 +177,19 @@ export function NewChatModeSelector({
         type="button"
         className="new-chat-mode__trigger"
         aria-label="选择新会话模式"
-        aria-haspopup="listbox"
+        aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
         onClick={() => {
           setActiveIndex(
-            Math.max(0, TOP_LEVEL_MODES.findIndex((mode) => mode.value === value)),
+            Math.max(
+              0,
+              TOP_LEVEL_ENTRIES.findIndex((entry) =>
+                entry.kind === "sandbox"
+                  ? value === "openclaw" || value === "hermes"
+                  : entry.mode.value === value,
+              ),
+            ),
           );
           setOpen((currentOpen) => !currentOpen);
           setSandboxSubmenuOpen(false);
@@ -167,7 +201,7 @@ export function NewChatModeSelector({
             else moveActive(event.key === "ArrowDown" ? 1 : -1);
           } else if (open && (event.key === "Enter" || event.key === " ")) {
             event.preventDefault();
-            choose(TOP_LEVEL_MODES[activeIndex]);
+            activateEntry(TOP_LEVEL_ENTRIES[activeIndex]);
           } else if (open && event.key === "Escape") {
             event.preventDefault();
             setOpen(false);
@@ -189,7 +223,7 @@ export function NewChatModeSelector({
       {open ? (
         <div
           className="new-chat-mode__menu"
-          role="listbox"
+          role="menu"
           aria-label="新会话模式"
           tabIndex={-1}
           onKeyDown={(event) => {
@@ -198,7 +232,7 @@ export function NewChatModeSelector({
               moveActive(event.key === "ArrowDown" ? 1 : -1);
             } else if (event.key === "Enter") {
               event.preventDefault();
-              choose(TOP_LEVEL_MODES[activeIndex]);
+              activateEntry(TOP_LEVEL_ENTRIES[activeIndex]);
             } else if (event.key === "Escape") {
               event.preventDefault();
               setOpen(false);
@@ -206,109 +240,131 @@ export function NewChatModeSelector({
             }
           }}
         >
-          {TOP_LEVEL_MODES.map((mode, index) => (
-            <div key={mode.value}>
-              {mode.value === "skill-create" ? (
-                <div className="new-chat-mode__sandbox-menu">
-                  <button
-                    type="button"
-                    className={`new-chat-mode__option new-chat-mode__sandbox-parent${
-                      value === "openclaw" || value === "hermes" ? " is-selected" : ""
-                    }`}
-                    aria-haspopup="listbox"
-                    aria-expanded={sandboxSubmenuOpen}
-                    disabled={openclawEnabled !== true && hermesEnabled !== true}
-                    onClick={() => setSandboxSubmenuOpen((currentOpen) => !currentOpen)}
+          {TOP_LEVEL_ENTRIES.map((entry, index) =>
+            entry.kind === "sandbox" ? (
+              <div className="new-chat-mode__sandbox-menu" key="sandbox">
+                <button
+                  type="button"
+                  className={`new-chat-mode__option new-chat-mode__sandbox-parent${
+                    value === "openclaw" || value === "hermes" ? " is-selected" : ""
+                  }${index === activeIndex ? " is-active" : ""}`}
+                  role="menuitem"
+                  aria-haspopup="menu"
+                  aria-expanded={sandboxSubmenuOpen}
+                  disabled={openclawEnabled !== true && hermesEnabled !== true}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onClick={() => setSandboxSubmenuOpen((currentOpen) => !currentOpen)}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowRight") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setSandboxSubmenuOpen(true);
+                    } else if (event.key === "ArrowLeft" || event.key === "Escape") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setSandboxSubmenuOpen(false);
+                    }
+                  }}
+                >
+                  <span className="new-chat-mode__option-icon new-chat-mode__sandbox-stack">
+                    <SandboxBrandIcon brand="openclaw" />
+                    <SandboxBrandIcon brand="hermes" />
+                  </span>
+                  <span className="new-chat-mode__copy">
+                    <span className="new-chat-mode__label">Agent 沙箱</span>
+                    <span>
+                      {openclawEnabled === undefined || hermesEnabled === undefined
+                        ? "正在检查配置"
+                        : openclawEnabled || hermesEnabled
+                          ? "选择 OpenClaw 或 Hermes"
+                          : "管理员未配置"}
+                    </span>
+                  </span>
+                  <svg
+                    className="new-chat-mode__submenu-chevron"
+                    viewBox="0 0 12 12"
+                    aria-hidden="true"
                   >
-                    <span className="new-chat-mode__option-icon new-chat-mode__sandbox-stack">
-                      <SandboxBrandIcon brand="openclaw" />
-                      <SandboxBrandIcon brand="hermes" />
-                    </span>
-                    <span className="new-chat-mode__copy">
-                      <span className="new-chat-mode__label">Agent 沙箱</span>
-                      <span>
-                        {openclawEnabled === undefined || hermesEnabled === undefined
-                          ? "正在检查配置"
-                          : openclawEnabled || hermesEnabled
-                            ? "选择 OpenClaw 或 Hermes"
-                            : "管理员未配置"}
-                      </span>
-                    </span>
-                    <svg
-                      className="new-chat-mode__submenu-chevron"
-                      viewBox="0 0 12 12"
-                      aria-hidden="true"
-                    >
-                      <path d="m4.5 3 3 3-3 3" />
-                    </svg>
-                  </button>
-                  {sandboxSubmenuOpen ? (
-                    <div
-                      className="new-chat-mode__submenu"
-                      role="group"
-                      aria-label="Agent 沙箱"
-                    >
-                      {SANDBOX_MODES.map((sandboxMode) => (
-                        <button
-                          key={sandboxMode.value}
-                          type="button"
-                          role="option"
-                          aria-selected={value === sandboxMode.value}
-                          aria-disabled={modeDisabled(sandboxMode)}
-                          disabled={modeDisabled(sandboxMode)}
-                          className="new-chat-mode__option new-chat-mode__submenu-option"
-                          onClick={() => choose(sandboxMode)}
-                        >
-                          <span className="new-chat-mode__option-icon">
-                            <ModeIcon mode={sandboxMode.value} />
-                          </span>
-                          <span className="new-chat-mode__copy">
-                            <span className="new-chat-mode__label">{sandboxMode.label}</span>
-                            <span>{modeDescription(sandboxMode)}</span>
-                          </span>
-                          {value === sandboxMode.value ? (
-                            <svg
-                              className="new-chat-mode__check"
-                              viewBox="0 0 16 16"
-                              aria-hidden="true"
-                            >
-                              <path d="m3.5 8.2 2.8 2.8 6.2-6" />
-                            </svg>
-                          ) : null}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
+                    <path d="m4.5 3 3 3-3 3" />
+                  </svg>
+                </button>
+                {sandboxSubmenuOpen ? (
+                  <div
+                    className="new-chat-mode__submenu"
+                    role="menu"
+                    aria-label="Agent 沙箱"
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                      if (event.key === "Escape" || event.key === "ArrowLeft") {
+                        event.preventDefault();
+                        setSandboxSubmenuOpen(false);
+                      }
+                    }}
+                  >
+                    {SANDBOX_MODES.map((sandboxMode) => (
+                      <button
+                        key={sandboxMode.value}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={value === sandboxMode.value}
+                        aria-disabled={modeDisabled(sandboxMode)}
+                        disabled={modeDisabled(sandboxMode)}
+                        className="new-chat-mode__option new-chat-mode__submenu-option"
+                        onClick={() => choose(sandboxMode)}
+                      >
+                        <span className="new-chat-mode__option-icon">
+                          <ModeIcon mode={sandboxMode.value} />
+                        </span>
+                        <span className="new-chat-mode__copy">
+                          <span className="new-chat-mode__label">{sandboxMode.label}</span>
+                          <span>{modeDescription(sandboxMode)}</span>
+                        </span>
+                        {value === sandboxMode.value ? (
+                          <svg
+                            className="new-chat-mode__check"
+                            viewBox="0 0 16 16"
+                            aria-hidden="true"
+                          >
+                            <path d="m3.5 8.2 2.8 2.8 6.2-6" />
+                          </svg>
+                        ) : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
               <button
+                key={entry.mode.value}
                 type="button"
-                role="option"
-                aria-selected={value === mode.value}
-                aria-disabled={modeDisabled(mode)}
-                disabled={modeDisabled(mode)}
+                role="menuitemradio"
+                aria-checked={value === entry.mode.value}
+                aria-disabled={modeDisabled(entry.mode)}
+                disabled={modeDisabled(entry.mode)}
                 className={`new-chat-mode__option${index === activeIndex ? " is-active" : ""}`}
                 onMouseEnter={() => setActiveIndex(index)}
-                onClick={() => choose(mode)}
+                onClick={() => choose(entry.mode)}
               >
-                <span className="new-chat-mode__option-icon"><ModeIcon mode={mode.value} /></span>
+                <span className="new-chat-mode__option-icon">
+                  <ModeIcon mode={entry.mode.value} />
+                </span>
                 <span className="new-chat-mode__copy">
                   <span className="new-chat-mode__label">
-                    {mode.value === "agent" ? agentName : mode.label}
-                    {mode.value === "skill-create" ? (
+                    {entry.mode.value === "agent" ? agentName : entry.mode.label}
+                    {entry.mode.value === "skill-create" ? (
                       <span className="new-chat-mode__beta">Beta</span>
                     ) : null}
                   </span>
-                  <span>{modeDescription(mode)}</span>
+                  <span>{modeDescription(entry.mode)}</span>
                 </span>
-                {value === mode.value ? (
+                {value === entry.mode.value ? (
                   <svg className="new-chat-mode__check" viewBox="0 0 16 16" aria-hidden="true">
                     <path d="m3.5 8.2 2.8 2.8 6.2-6" />
                   </svg>
                 ) : null}
               </button>
-            </div>
-          ))}
+            ),
+          )}
         </div>
       ) : null}
     </div>

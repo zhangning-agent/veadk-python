@@ -1,7 +1,15 @@
-import { ExternalLink, Globe2, Loader2, Maximize2, Minus, Terminal, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { OpenClawSession } from "../adk/openclaw";
 import { SandboxBrandIcon } from "./SandboxBrandIcon";
+import {
+  SandboxCloseIcon,
+  SandboxExternalLinkIcon,
+  SandboxLoadingIcon,
+  SandboxMinimizeIcon,
+  SandboxOpenIcon,
+  SandboxTerminalIcon,
+  SandboxWebIcon,
+} from "./icons/SandboxWorkspaceIcons";
 import "./OpenClawWorkspace.css";
 
 function duration(seconds: number): string {
@@ -47,7 +55,7 @@ export function OpenClawLifecycle({
           aria-label="打开 OpenClaw"
           onClick={onOpen}
         >
-          <Maximize2 size={13} />
+          <SandboxOpenIcon size={13} />
           <span>打开</span>
         </button>
       ) : null}
@@ -72,6 +80,15 @@ export function OpenClawWorkspace({
     setLoaded(false);
     setView(nextView);
   }
+  function moveView(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const nextView = view === "webui" ? "terminal" : "webui";
+    selectView(nextView);
+    event.currentTarget
+      .parentElement?.querySelector<HTMLButtonElement>(`[data-view="${nextView}"]`)
+      ?.focus();
+  }
   return (
     <section className="openclaw-workspace">
       <header className="openclaw-workspace__header">
@@ -87,25 +104,31 @@ export function OpenClawWorkspace({
             <button
               type="button"
               role="tab"
+              data-view="webui"
               aria-selected={view === "webui"}
+              tabIndex={view === "webui" ? 0 : -1}
               onClick={() => selectView("webui")}
+              onKeyDown={moveView}
             >
-              <Globe2 size={13} />
+              <SandboxWebIcon size={13} />
               WebUI
             </button>
             <button
               type="button"
               role="tab"
+              data-view="terminal"
               aria-selected={view === "terminal"}
+              tabIndex={view === "terminal" ? 0 : -1}
               onClick={() => selectView("terminal")}
+              onKeyDown={moveView}
             >
-              <Terminal size={13} />
+              <SandboxTerminalIcon size={13} />
               Terminal
             </button>
           </div>
           <div className="openclaw-workspace__actions">
             <a href={activeUrl} target="_blank" rel="noreferrer" title="在新窗口打开">
-              <ExternalLink size={15} />
+              <SandboxExternalLinkIcon size={15} />
             </a>
             <button
               type="button"
@@ -113,17 +136,17 @@ export function OpenClawWorkspace({
               title="最小化 OpenClaw"
               aria-label="最小化 OpenClaw"
             >
-              <Minus size={17} />
+              <SandboxMinimizeIcon size={17} />
             </button>
             <button type="button" onClick={onExit} title="关闭并销毁沙箱">
-              <X size={17} />
+              <SandboxCloseIcon size={17} />
             </button>
           </div>
         </div>
       </header>
       {!loaded ? (
         <div className="openclaw-workspace__loading">
-          <Loader2 className="spin" />
+          <SandboxLoadingIcon className="spin" />
           正在载入 {view === "webui" ? "OpenClaw WebUI" : "Terminal"}…
         </div>
       ) : null}
