@@ -20,7 +20,6 @@ import re
 import secrets
 import time
 import zlib
-
 from collections.abc import Callable
 from typing import Any
 
@@ -33,8 +32,10 @@ _OPENCLAW_PORT = 8080
 _OPENCLAW_TAG_KEY = "veadk-studio-purpose"
 _OPENCLAW_TAG_VALUE = "openclaw"
 _HERMES_TAG_VALUE = "hermes"
+_CODE_SANDBOX_TAG_VALUE = "code-sandbox"
 _HERMES_NAME_MARKERS = ("hermes",)
 _OPENCLAW_NAME_MARKERS = ("openclaw", "arkclaw")
+_CODE_SANDBOX_NAME_MARKERS = ("code-sandbox", "code-env", "codex")
 _READY_STATUS = "Ready"
 _FAILED_STATUSES = frozenset({"Error", "Failed", "CreateFailed", "Deleting", "Deleted"})
 
@@ -67,6 +68,9 @@ def ensure_studio_openclaw_tool(
     description: str = "Reusable VeADK Studio OpenClaw sandbox image",
     kind_label: str = "OpenClaw",
     api_key_prefix: str = "studio-openclaw",
+    api_key_env: str = "MODEL_AGENT_API_KEY",
+    model_name_env: str = "MODEL_AGENT_NAME",
+    model_base_url_env: str = "MODEL_AGENT_BASE_URL",
 ) -> str:
     """Reuse a tagged/named sandbox Tool, or create its immutable image config.
 
@@ -164,9 +168,9 @@ def ensure_studio_openclaw_tool(
     else:
         required = {
             "image_url": requested_image_url,
-            "MODEL_AGENT_API_KEY": model_api_key,
-            "MODEL_AGENT_NAME": model_name,
-            "MODEL_AGENT_BASE_URL": model_base_url,
+            api_key_env: model_api_key,
+            model_name_env: model_name,
+            model_base_url_env: model_base_url,
         }
         missing = [key for key, value in required.items() if not value.strip()]
         if missing:
@@ -196,13 +200,13 @@ def ensure_studio_openclaw_tool(
                 ),
                 Envs=[
                     tools_types.EnvsItemForCreateTool(
-                        Key="MODEL_AGENT_API_KEY", Value=model_api_key
+                        Key=api_key_env, Value=model_api_key
                     ),
                     tools_types.EnvsItemForCreateTool(
-                        Key="MODEL_AGENT_NAME", Value=model_name
+                        Key=model_name_env, Value=model_name
                     ),
                     tools_types.EnvsItemForCreateTool(
-                        Key="MODEL_AGENT_BASE_URL", Value=model_base_url
+                        Key=model_base_url_env, Value=model_base_url
                     ),
                 ],
                 Tags=[
@@ -283,6 +287,48 @@ def ensure_studio_hermes_tool(
         description="Reusable VeADK Studio Hermes sandbox image",
         kind_label="Hermes",
         api_key_prefix="studio-hermes",
+    )
+
+
+def ensure_studio_code_sandbox_tool(
+    *,
+    name: str,
+    image_url: str,
+    model_api_key: str,
+    model_name: str,
+    model_base_url: str,
+    access_key: str = "",
+    secret_key: str = "",
+    region: str = "cn-beijing",
+    session_token: str = "",
+    client: Any | None = None,
+    timeout_seconds: float = 600.0,
+    poll_interval: float = 5.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Reuse or create the Private Tool backing Studio's Code sandbox."""
+    return ensure_studio_openclaw_tool(
+        name=name,
+        image_url=image_url,
+        model_api_key=model_api_key,
+        model_name=model_name,
+        model_base_url=model_base_url,
+        access_key=access_key,
+        secret_key=secret_key,
+        region=region,
+        session_token=session_token,
+        client=client,
+        timeout_seconds=timeout_seconds,
+        poll_interval=poll_interval,
+        sleep=sleep,
+        tag_value=_CODE_SANDBOX_TAG_VALUE,
+        name_markers=_CODE_SANDBOX_NAME_MARKERS,
+        description="Reusable VeADK Studio Code sandbox image",
+        kind_label="Code Sandbox",
+        api_key_prefix="studio-code-sandbox",
+        api_key_env="CODEX_API_KEY",
+        model_name_env="CODEX_MODEL",
+        model_base_url_env="CODEX_BASE_URL",
     )
 
 

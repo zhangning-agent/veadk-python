@@ -1,1 +1,7 @@
-export type NewChatMode = "agent" | "temporary" | "openclaw" | "hermes" | "skill-create";
+export type NewChatMode =
+  | "agent"
+  | "temporary"
+  | "openclaw"
+  | "hermes"
+  | "code-sandbox"
+  | "skill-create";

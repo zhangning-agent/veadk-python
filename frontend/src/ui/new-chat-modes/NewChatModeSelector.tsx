@@ -32,13 +32,21 @@ const MODES: ModeOption[] = [
     description: "在独立沙箱中打开 Hermes",
   },
   {
+    value: "code-sandbox",
+    label: "Code 沙箱",
+    description: "在独立沙箱中打开 Codex 开发环境",
+  },
+  {
     value: "skill-create",
     label: "创建 Skill",
     description: "使用两个模型生成并对比 Skill",
   },
 ];
 const SANDBOX_MODES = MODES.filter(
-  (mode) => mode.value === "openclaw" || mode.value === "hermes",
+  (mode) =>
+    mode.value === "openclaw" ||
+    mode.value === "hermes" ||
+    mode.value === "code-sandbox",
 );
 type MenuEntry =
   | { kind: "mode"; mode: ModeOption }
@@ -47,7 +55,7 @@ const TOP_LEVEL_ENTRIES: MenuEntry[] = [
   { kind: "mode", mode: MODES[0] },
   { kind: "mode", mode: MODES[1] },
   { kind: "sandbox" },
-  { kind: "mode", mode: MODES[4] },
+  { kind: "mode", mode: MODES[5] },
 ];
 
 export interface NewChatModeSelectorProps {
@@ -58,6 +66,7 @@ export interface NewChatModeSelectorProps {
   temporaryEnabled?: boolean;
   openclawEnabled?: boolean;
   hermesEnabled?: boolean;
+  codeSandboxEnabled?: boolean;
   skillCreateEnabled?: boolean;
 }
 
@@ -70,8 +79,8 @@ function ModeIcon({ mode }: { mode: NewChatMode }) {
       </svg>
     );
   }
-  if (mode === "openclaw" || mode === "hermes") {
-    return <SandboxBrandIcon brand={mode} />;
+  if (mode === "openclaw" || mode === "hermes" || mode === "code-sandbox") {
+    return <SandboxBrandIcon brand={mode === "code-sandbox" ? "code" : mode} />;
   }
   if (mode === "temporary") {
     return (
@@ -94,6 +103,7 @@ export function NewChatModeSelector({
   temporaryEnabled,
   openclawEnabled,
   hermesEnabled,
+  codeSandboxEnabled,
   skillCreateEnabled,
 }: NewChatModeSelectorProps) {
   const [open, setOpen] = useState(false);
@@ -103,7 +113,9 @@ export function NewChatModeSelector({
       0,
       TOP_LEVEL_ENTRIES.findIndex((entry) =>
         entry.kind === "sandbox"
-          ? value === "openclaw" || value === "hermes"
+          ? value === "openclaw" ||
+            value === "hermes" ||
+            value === "code-sandbox"
           : entry.mode.value === value,
       ),
     ),
@@ -116,6 +128,7 @@ export function NewChatModeSelector({
     if (mode.value === "temporary") return temporaryEnabled;
     if (mode.value === "openclaw") return openclawEnabled;
     if (mode.value === "hermes") return hermesEnabled;
+    if (mode.value === "code-sandbox") return codeSandboxEnabled;
     if (mode.value === "skill-create") return skillCreateEnabled;
     return true;
   }
@@ -150,7 +163,11 @@ export function NewChatModeSelector({
 
   function entryDisabled(entry: MenuEntry): boolean {
     if (entry.kind === "mode") return modeDisabled(entry.mode);
-    return openclawEnabled !== true && hermesEnabled !== true;
+    return (
+      openclawEnabled !== true &&
+      hermesEnabled !== true &&
+      codeSandboxEnabled !== true
+    );
   }
 
   function choose(mode: ModeOption) {
@@ -186,7 +203,9 @@ export function NewChatModeSelector({
               0,
               TOP_LEVEL_ENTRIES.findIndex((entry) =>
                 entry.kind === "sandbox"
-                  ? value === "openclaw" || value === "hermes"
+                  ? value === "openclaw" ||
+                    value === "hermes" ||
+                    value === "code-sandbox"
                   : entry.mode.value === value,
               ),
             ),
@@ -246,12 +265,20 @@ export function NewChatModeSelector({
                 <button
                   type="button"
                   className={`new-chat-mode__option new-chat-mode__sandbox-parent${
-                    value === "openclaw" || value === "hermes" ? " is-selected" : ""
+                    value === "openclaw" ||
+                    value === "hermes" ||
+                    value === "code-sandbox"
+                      ? " is-selected"
+                      : ""
                   }${index === activeIndex ? " is-active" : ""}`}
                   role="menuitem"
                   aria-haspopup="menu"
                   aria-expanded={sandboxSubmenuOpen}
-                  disabled={openclawEnabled !== true && hermesEnabled !== true}
+                  disabled={
+                    openclawEnabled !== true &&
+                    hermesEnabled !== true &&
+                    codeSandboxEnabled !== true
+                  }
                   onMouseEnter={() => setActiveIndex(index)}
                   onClick={() => setSandboxSubmenuOpen((currentOpen) => !currentOpen)}
                   onKeyDown={(event) => {
@@ -269,14 +296,17 @@ export function NewChatModeSelector({
                   <span className="new-chat-mode__option-icon new-chat-mode__sandbox-stack">
                     <SandboxBrandIcon brand="openclaw" />
                     <SandboxBrandIcon brand="hermes" />
+                    <SandboxBrandIcon brand="code" />
                   </span>
                   <span className="new-chat-mode__copy">
                     <span className="new-chat-mode__label">Agent 沙箱</span>
                     <span>
-                      {openclawEnabled === undefined || hermesEnabled === undefined
+                      {openclawEnabled === undefined ||
+                      hermesEnabled === undefined ||
+                      codeSandboxEnabled === undefined
                         ? "正在检查配置"
-                        : openclawEnabled || hermesEnabled
-                          ? "选择 OpenClaw 或 Hermes"
+                        : openclawEnabled || hermesEnabled || codeSandboxEnabled
+                          ? "选择 OpenClaw、Hermes 或 Code 沙箱"
                           : "管理员未配置"}
                     </span>
                   </span>

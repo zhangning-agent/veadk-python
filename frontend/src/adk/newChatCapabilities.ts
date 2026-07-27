@@ -39,6 +39,10 @@ export async function getHermesCapability(): Promise<NewChatModeCapability> {
   return getCapability("/web/hermes/capabilities");
 }
 
+export async function getCodeSandboxCapability(): Promise<NewChatModeCapability> {
+  return getCapability("/web/code/capabilities");
+}
+
 export async function getSkillCreatorCapability(): Promise<NewChatModeCapability> {
   return getCapability("/web/skill-creator/capabilities");
 }

@@ -19,16 +19,20 @@ server that `veadk frontend` launches — no separate backend.
   progress resumes from Sandbox state if the creation stream is interrupted;
   completed candidates can be compared, downloaded as ZIP files, and added to
   AgentKit.
-- **Agent sandboxes**: choose OpenClaw or Hermes from the nested Agent Sandbox
-  menu. Each product starts in its WebUI (`/openclaw` or `/hermes`) and exposes
-  a separate `/terminal` view through the top-right WebUI/Terminal tabs.
+- **Agent sandboxes**: choose OpenClaw, Hermes, or Code Sandbox from the nested
+  Agent Sandbox menu. Each product starts in its WebUI (`/openclaw`, `/hermes`,
+  or `/codex`) and exposes a separate `/terminal` view through the top-right
+  WebUI/Terminal tabs.
   Sandboxes can coexist, minimize without being destroyed, and reopen from
   their branded lifecycle cards. If configured, `ARK_BASE_URL`,
   `MODEL_AGENT_API_KEY`, and `MODEL_AGENT_NAME` override the sandbox model
-  configuration and are forwarded by the Studio server. OpenClaw WebUI is
-  embedded through a session-scoped reverse proxy because its upstream
-  security headers disallow framing; the proxy token and upstream credentials
-  stay server-side.
+  configuration and are forwarded by the Studio server. Code Sandbox also
+  accepts the image-native `CODEX_BASE_URL`, `CODEX_API_KEY`, and `CODEX_MODEL`
+  names. OpenClaw and Code WebUIs are embedded through session-scoped reverse
+  proxies because their upstream security headers disallow framing; proxy
+  tokens and upstream credentials stay server-side. Code's native Terminal and
+  Browser UI, including shell/CDP WebSockets, remain under the same session
+  proxy so iframe restrictions do not block them.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Built-in tool activity** gives web search, image/video generation, memory,
   and knowledge-base retrieval their own repository-drawn icons and concise
@@ -301,10 +305,14 @@ different instance.
 For local Studio, run the AgentKit `credential-hosting` command and bind its
 result to both CodeEnv Tools. A cloud deployment creates both Tools when their
 IDs are omitted. Alternatively, select existing Tools with
-`--sandbox-chat-codex-tool-id` and `--sandbox-skill-creator-tool-id`. The deploy
-command obtains the Ark key with the deployer's Volcengine credentials, stores
-it through AgentKit credential hosting, and binds only the returned ticket and
-relay URL to the Tools:
+`--sandbox-chat-codex-tool-id`, `--sandbox-skill-creator-tool-id`,
+`--sandbox-openclaw-tool-id`, and `--sandbox-code-tool-id`. The Code Sandbox
+Tool is otherwise reused or lazily created from
+`temp-cr-images-cn-beijing.cr.volces.com/agentkit-sandbox/code-env:0.0.7.35`
+when a user confirms its first launch. The deploy command obtains the Ark key
+with the deployer's Volcengine credentials, stores it through AgentKit
+credential hosting, and binds only the returned ticket and relay URL to the
+Tools:
 
 ```bash
 veadk studio deploy \
