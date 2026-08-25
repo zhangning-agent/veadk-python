@@ -36,27 +36,45 @@
 ---
 
 ## 🚀 运行方法
+ 
+### 1. 配置环境变量
 
-### 1. 方式一：通过命令行参数启动
+复制环境配置文件示例并填入对应的配置与密钥：
 
 ```bash
+cp examples/16_self_host_sandbox/.env.example examples/16_self_host_sandbox/.env
+```
+
+或直接在终端中导出环境变量：
+
+```bash
+export ANTHROPIC_BASE_URL="http://localhost:8080"
+export ANTHROPIC_ENVIRONMENT_ID="env_01SLqXHseguCmohifEqeUAYu"
+export ANTHROPIC_ENVIRONMENT_KEY="ebk_xxx"
+export X_TOP_ACCOUNT_ID="your-account-id"
+```
+
+
+### 2. 启动示例
+
+可以直接通过提供的脚本一键运行（内置 `uv` 自动环境识别）：
+
+```bash
+bash examples/16_self_host_sandbox/run.sh
+```
+
+或者使用 `uv run` / `python` 命令：
+
+```bash
+# 使用 uv
+uv run --extra sandbox python examples/16_self_host_sandbox/main.py
+
+# 或通过命令行参数传递
 python examples/16_self_host_sandbox/main.py \
   --base-url "http://localhost:8080" \
   --env-id "env_01SLqXHseguCmohifEqeUAYu" \
   --bearer-token "ebk_xxx" \
   --prompt "请在 /workspace 下创建一个 quick_sort.py 并运行验证"
-```
-
-### 2. 方式二：通过环境变量配置
-
-```bash
-export SANDBOX_BASE_URL="http://localhost:8080"
-export SANDBOX_ENVIRONMENT_ID="env_01SLqXHseguCmohifEqeUAYu"
-export SANDBOX_AGENT_ID="agent_011CSd8hFhXGpz33bM1pBw7y"
-export SANDBOX_BEARER_TOKEN="ebk_xxx"
-export SANDBOX_BASH_TOOL_NAME="bash"
-
-python examples/16_self_host_sandbox/main.py
 ```
 
 未提供 `--session-id` 时，`ShortTermMemory.after_create_session_callback` 会先通过
@@ -67,3 +85,4 @@ bash，并写回匹配的 `user.tool_result`。
 示例不会把工具任务伪装成 `user.message`，也不依赖远端大模型再次生成工具调用。
 事件的 `id` 直接使用 VeADK 的 function call ID；Worker 必须将它作为
 `tool_use_id` 原样回传。
+

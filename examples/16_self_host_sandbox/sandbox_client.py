@@ -53,9 +53,15 @@ class SelfHostSandboxClient:
         remote_bash_tool_name: Optional[str] = None,
         timeout: int = 120,
     ):
-        self.base_url = (base_url or os.getenv("SANDBOX_BASE_URL", "")).rstrip("/")
-        self.environment_id = environment_id or os.getenv(
-            "SANDBOX_ENVIRONMENT_ID", "env_01SLqXHseguCmohifEqeUAYu"
+        self.base_url = (
+            base_url
+            or os.getenv("ANTHROPIC_BASE_URL")
+            or os.getenv("SANDBOX_BASE_URL", "")
+        ).rstrip("/")
+        self.environment_id = (
+            environment_id
+            or os.getenv("ANTHROPIC_ENVIRONMENT_ID")
+            or os.getenv("SANDBOX_ENVIRONMENT_ID", "env_01SLqXHseguCmohifEqeUAYu")
         )
         self.agent_id = agent_id or os.getenv(
             "SANDBOX_AGENT_ID", "agent_011CSd8hFhXGpz33bM1pBw7y"
@@ -64,6 +70,8 @@ class SelfHostSandboxClient:
 
         raw_token = (
             bearer_token
+            or os.getenv("ANTHROPIC_ENVIRONMENT_KEY")
+            or os.getenv("ANTHROPIC_API_KEY")
             or os.getenv("SANDBOX_BEARER_TOKEN")
             or os.getenv("SANDBOX_API_KEY", "")
         )
@@ -78,12 +86,13 @@ class SelfHostSandboxClient:
 
         if not self.base_url:
             raise ValueError(
-                "SANDBOX_BASE_URL must be configured in .env or arguments."
+                "ANTHROPIC_BASE_URL (or SANDBOX_BASE_URL) must be configured in .env or arguments."
             )
         if not self.bearer_token:
             raise ValueError(
-                "SANDBOX_BEARER_TOKEN must be configured in .env or arguments."
+                "ANTHROPIC_ENVIRONMENT_KEY (or SANDBOX_BEARER_TOKEN) must be configured in .env or arguments."
             )
+
 
         # Configure official Anthropic SDK client
         default_headers = {

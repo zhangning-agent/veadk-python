@@ -35,19 +35,39 @@ This example connects a **VeADK Agent** to a **Self-Hosted Sandbox Environment**
 
 ## 🚀 Quick Start
 
-### 1. Configure Environment Variables (or pass CLI args)
+### 1. Configure Environment Variables
+
+Copy the example environment configuration file and update it with your credentials:
 
 ```bash
-export SANDBOX_BASE_URL="http://localhost:8080"
-export SANDBOX_ENVIRONMENT_ID="env_01SLqXHseguCmohifEqeUAYu"
-export SANDBOX_AGENT_ID="agent_011CSd8hFhXGpz33bM1pBw7y"
-export SANDBOX_BEARER_TOKEN="your-sandbox-token"
-export SANDBOX_BASH_TOOL_NAME="bash"
+cp examples/16_self_host_sandbox/.env.example examples/16_self_host_sandbox/.env
 ```
+
+Alternatively, export variables directly or pass CLI flags:
+
+```bash
+export ANTHROPIC_BASE_URL="http://localhost:8080"
+export ANTHROPIC_ENVIRONMENT_ID="env_01SLqXHseguCmohifEqeUAYu"
+export ANTHROPIC_ENVIRONMENT_KEY="your-sandbox-token"
+export X_TOP_ACCOUNT_ID="your-account-id"
+```
+
 
 ### 2. Run the Demo
 
+You can run the demo directly with the provided `run.sh` script (which uses `uv` automatically):
+
 ```bash
+bash examples/16_self_host_sandbox/run.sh
+```
+
+Or using `uv run` / `python`:
+
+```bash
+# Using uv
+uv run --extra sandbox python examples/16_self_host_sandbox/main.py
+
+# Or passing CLI arguments
 python examples/16_self_host_sandbox/main.py \
   --base-url "http://localhost:8080" \
   --env-id "env_01SLqXHseguCmohifEqeUAYu" \
@@ -63,3 +83,4 @@ that event, runs the bash command, and posts a matching `user.tool_result`.
 The example does not post tool tasks as `user.message`, and it does not expect a
 remote LLM to create a second tool call. The event's `id` is the VeADK function
 call ID and must be returned by the Worker as `tool_use_id`.
+

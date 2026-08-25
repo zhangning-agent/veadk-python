@@ -106,8 +106,8 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="VeADK Self-Hosted Sandbox Agent Demo")
     parser.add_argument(
         "--base-url",
-        default=os.getenv("SANDBOX_BASE_URL"),
-        help="Base URL of the APIG Sandbox Server (reads from SANDBOX_BASE_URL in .env by default)",
+        default=os.getenv("ANTHROPIC_BASE_URL") or os.getenv("SANDBOX_BASE_URL"),
+        help="Base URL of the APIG Sandbox Server (reads from ANTHROPIC_BASE_URL or SANDBOX_BASE_URL)",
     )
     parser.add_argument(
         "--agent-id",
@@ -116,8 +116,8 @@ async def main() -> None:
     )
     parser.add_argument(
         "--env-id",
-        default=os.getenv("SANDBOX_ENVIRONMENT_ID", "env_01SLqXHseguCmohifEqeUAYu"),
-        help="Self-Hosted Environment ID (reads from SANDBOX_ENVIRONMENT_ID in .env)",
+        default=os.getenv("ANTHROPIC_ENVIRONMENT_ID") or os.getenv("SANDBOX_ENVIRONMENT_ID", "env_01SLqXHseguCmohifEqeUAYu"),
+        help="Self-Hosted Environment ID (reads from ANTHROPIC_ENVIRONMENT_ID or SANDBOX_ENVIRONMENT_ID)",
     )
     parser.add_argument(
         "--session-id",
@@ -126,9 +126,10 @@ async def main() -> None:
     )
     parser.add_argument(
         "--bearer-token",
-        default=os.getenv("SANDBOX_BEARER_TOKEN"),
-        help="Bearer Token for APIG Gateway authorization (reads from SANDBOX_BEARER_TOKEN in .env)",
+        default=os.getenv("ANTHROPIC_ENVIRONMENT_KEY") or os.getenv("ANTHROPIC_API_KEY") or os.getenv("SANDBOX_BEARER_TOKEN"),
+        help="Bearer Token / API Key for Gateway authorization (reads from ANTHROPIC_ENVIRONMENT_KEY / SANDBOX_BEARER_TOKEN)",
     )
+
     parser.add_argument(
         "--account-id",
         default=os.getenv("X_TOP_ACCOUNT_ID"),
