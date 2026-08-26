@@ -23,85 +23,15 @@ Session-backed Worker Protocol:
 import argparse
 import asyncio
 import os
-from pathlib import Path
 
-from dotenv import load_dotenv
-
-# 1. Automatically load all credentials and domain configurations from .env
-env_file = Path(__file__).resolve().parent / ".env"
-if env_file.exists():
-    load_dotenv(env_file, override=True)
-
-from veadk import Agent, Runner  # noqa: E402
-from veadk.memory.short_term_memory import ShortTermMemory  # noqa: E402
-from veadk.runtime import DispatchRuntimeProvider, ToolCall  # noqa: E402
-from sandbox_client import SelfHostSandboxClient  # noqa: E402
+from agents.self_host_sandbox_agent.agent import (
+    agent,
+    sandbox_client,
+    sandbox_sessions,
+)
+from veadk import Runner
 
 
-# ─────────────────────────────────────────────────────────────
-# 2. Global Sandbox Client instance
-# ─────────────────────────────────────────────────────────────
-sandbox_client: SelfHostSandboxClient = None
-
-
-def bash(command: str, timeout: float = 120) -> dict:
-    """Execute bash in the registered Self-Hosted Sandbox.
-
-    Args:
-        command: The shell command to run, e.g. "pytest tests/", "ls -la", "python script.py".
-        timeout: Maximum number of seconds to wait for the remote tool result.
-
-    Returns:
-        A dictionary containing exit_code, stdout, and stderr from the sandbox.
-    """
-    raise RuntimeError("Remote tools must be intercepted by DispatchRuntimeProvider")
-
-
-def read_file(
-    file_path: str, offset: int | None = None, limit: int | None = None
-) -> dict:
-    """Read a text file in the remote sandbox, optionally by line range."""
-    raise RuntimeError("Remote tools must be intercepted by DispatchRuntimeProvider")
-
-
-def write_file(file_path: str, content: str) -> dict:
-    """Create or overwrite a text file in the remote sandbox."""
-    raise RuntimeError("Remote tools must be intercepted by DispatchRuntimeProvider")
-
-
-def edit_file(
-    file_path: str,
-    old_string: str,
-    new_string: str,
-    replace_all: bool = False,
-) -> dict:
-    """Replace an exact string in a remote sandbox file."""
-    raise RuntimeError("Remote tools must be intercepted by DispatchRuntimeProvider")
-
-
-def list_files(path: str = "/workspace", max_depth: int = 4) -> dict:
-    """List files below a directory in the remote sandbox."""
-    raise RuntimeError("Remote tools must be intercepted by DispatchRuntimeProvider")
-
-
-def search_files(
-    pattern: str,
-    path: str = "/workspace",
-    glob: str | None = None,
-    case_insensitive: bool = False,
-) -> dict:
-    """Search remote sandbox files with ripgrep or grep."""
-    raise RuntimeError("Remote tools must be intercepted by DispatchRuntimeProvider")
-
-
-def python(code: str, workdir: str = "/workspace", timeout: float = 120) -> dict:
-    """Run Python code in the remote sandbox."""
-    raise RuntimeError("Remote tools must be intercepted by DispatchRuntimeProvider")
-
-
-# ─────────────────────────────────────────────────────────────
-# 3. Main Entry Point
-# ─────────────────────────────────────────────────────────────
 async def main() -> None:
     parser = argparse.ArgumentParser(description="VeADK Self-Hosted Sandbox Agent Demo")
     parser.add_argument(
@@ -129,7 +59,6 @@ async def main() -> None:
         default=os.getenv("ANTHROPIC_ENVIRONMENT_KEY") or os.getenv("ANTHROPIC_API_KEY") or os.getenv("SANDBOX_BEARER_TOKEN"),
         help="Bearer Token / API Key for Gateway authorization (reads from ANTHROPIC_ENVIRONMENT_KEY / SANDBOX_BEARER_TOKEN)",
     )
-
     parser.add_argument(
         "--account-id",
         default=os.getenv("X_TOP_ACCOUNT_ID"),
@@ -147,36 +76,24 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
-    # Initialize client with configurations from .env / args
-    global sandbox_client
-    sandbox_client = SelfHostSandboxClient(
-        base_url=args.base_url,
-        environment_id=args.env_id,
-        agent_id=args.agent_id,
-        session_id=args.session_id,
-        bearer_token=args.bearer_token,
-        account_id=args.account_id,
-        remote_bash_tool_name=args.bash_tool_name,
-    )
-
-    async def after_create_session(_session) -> None:
-        """Create the remote Session after VeADK creates its local Session."""
-        if sandbox_client.session_id:
-            return
-        print(
-            "⏳ 正在通过 POST /v1/sessions 在服务端创建 Self-Hosted Session 并推入 WorkQueue..."
-        )
-        await asyncio.to_thread(sandbox_client.create_session)
-        print(f"✅ Session 创建成功! Session ID: {sandbox_client.session_id}")
-
-    async def dispatch_task(tool_call: ToolCall) -> dict:
-        """Convert an ADK tool call into a Managed Session event task."""
-        return await asyncio.to_thread(
-            sandbox_client.dispatch_tool,
-            tool_call.name,
-            tool_call.arguments,
-            dispatch_id=tool_call.id,
-        )
+    # Apply any CLI argument overrides to sandbox client
+    if args.base_url:
+        sandbox_client.base_url = args.base_url.rstrip("/")
+    if args.env_id:
+        sandbox_client.environment_id = args.env_id
+    if args.agent_id:
+        sandbox_client.agent_id = args.agent_id
+    if args.session_id:
+        sandbox_client.session_id = args.session_id
+    if args.bearer_token:
+        token = args.bearer_token
+        if token.startswith("Bearer "):
+            token = token[7:].strip()
+        sandbox_client.bearer_token = token
+    if args.account_id:
+        sandbox_client.account_id = args.account_id
+    if args.bash_tool_name:
+        sandbox_client.remote_bash_tool_name = args.bash_tool_name
 
     print("=" * 60)
     print("🚀 VeADK Self-Hosted Sandbox Agent Initializing")
@@ -192,55 +109,68 @@ async def main() -> None:
     print(f"💬 Task Prompt:            {args.prompt}")
     print("=" * 60)
 
-    # Step 2: Define the VeADK Agent equipped with Sandbox tools
-    agent = Agent(
-        name="self_host_sandbox_agent",
-        description="An engineering agent dispatching tool calls to a Self-Hosted Worker.",
-        instruction=(
-            f"You are an autonomous engineering assistant connected to a remote Self-Hosted Sandbox (Env ID: {sandbox_client.environment_id}). "
-            "Use the provided bash, file, search, and Python tools for every operation in the sandbox. "
-            "When the task is accomplished, stop calling tools and output your final result."
-        ),
-        tools=[
-            bash,
-            read_file,
-            write_file,
-            edit_file,
-            list_files,
-            search_files,
-            python,
-        ],
-    )
-
-    short_term_memory = ShortTermMemory(
-        after_create_session_callback=after_create_session,
-    )
-    dispatch_runtime = DispatchRuntimeProvider(
-        dispatch_task,
-        # Route every resolved non-MCP tool to the Worker. MCP tools retain
-        # their original ADK implementation inside DispatchRuntimeProvider.
-        dispatchable_tools=None,
-    )
     runner = Runner(
         agent=agent,
         app_name="self_host_sandbox_demo",
-        short_term_memory=short_term_memory,
-        plugins=[dispatch_runtime],
     )
 
-    run_kwargs = {}
-    if sandbox_client.session_id:
-        run_kwargs["session_id"] = sandbox_client.session_id
+    session_id = sandbox_client.session_id or f"self-host-{os.getpid()}"
+
+    # Bind the CLI-configured client to this run's session id so dispatch_task
+    # routes tool calls to the sandbox we configured above (one sandbox / run).
+    sandbox_sessions.bind(session_id, sandbox_client)
+
+    # Ensure the session exists (this triggers after_create_session, which
+    # provisions the remote sandbox) before streaming events through run_async.
+    if runner.short_term_memory:
+        await runner.short_term_memory.create_session(
+            app_name=runner.app_name,
+            user_id=runner.user_id,
+            session_id=session_id,
+        )
+
+    run_config = RunConfig(
+        streaming_mode=StreamingMode.SSE,
+        max_llm_calls=int(os.getenv("MODEL_AGENT_MAX_LLM_CALLS", 100)),
+    )
+    new_message = types.Content(role="user", parts=[types.Part(text=args.prompt)])
+
+    print("\n" + "=" * 60)
+    print("🎯 Agent 流式输出:")
+    print("=" * 60)
 
     try:
-        answer = await runner.run(messages=args.prompt, **run_kwargs)
+        final_output = ""
+        async for event in runner.run_async(
+            user_id=runner.user_id,
+            session_id=session_id,
+            new_message=new_message,
+            run_config=run_config,
+        ):
+            if not (event.content and event.content.parts):
+                continue
+            for part in event.content.parts:
+                if part.thought:
+                    continue
+                if part.text:
+                    # Stream incremental model text as it arrives.
+                    print(part.text, end="", flush=True)
+                    if not event.partial:
+                        final_output = part.text
+                elif part.function_call:
+                    fc = part.function_call
+                    print(f"\n🔧 [tool call] {fc.name}({fc.args})", flush=True)
+                elif part.function_response:
+                    resp = part.function_response.response
+                    print(f"\n📤 [tool result] {resp}", flush=True)
+
         print("\n" + "=" * 60)
-        print("🎯 Agent 最终执行结果:")
+        print("✅ 最终结果:")
         print("=" * 60)
-        print(answer)
+        print(final_output)
     finally:
         # Notify the remote worker that the session turn has completed so it can release its lease
-        sandbox_client.post_status_idle()
+        sandbox_sessions.release(session_id)
 
 
 if __name__ == "__main__":

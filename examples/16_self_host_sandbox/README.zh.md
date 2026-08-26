@@ -57,16 +57,29 @@ export X_TOP_ACCOUNT_ID="your-account-id"
 
 ### 2. 启动示例
 
-可以直接通过提供的脚本一键运行（内置 `uv` 自动环境识别）：
+#### 方式一：Web 界面交互模式（`veadk web`）
+
+在浏览器中启动可视化 Web 调试交互界面（默认端口为 **8067**，支持在 `.env` 中通过 `PORT` 或 `--port` 自定义）：
 
 ```bash
-bash examples/16_self_host_sandbox/run.sh
+# 方式 A：通过 run.sh 快捷启动（自动切换到 agents 目录并使用 8067 端口）
+bash examples/16_self_host_sandbox/run.sh --web
+
+# 方式 B：进入 agents 目录直接运行
+cd examples/16_self_host_sandbox/agents
+veadk web --port 8067
 ```
 
-或者使用 `uv run` / `python` 命令：
+
+
+
+#### 方式二：CLI 命令行模式
 
 ```bash
-# 使用 uv
+# 使用 run.sh 运行
+bash examples/16_self_host_sandbox/run.sh
+
+# 或使用 uv
 uv run --extra sandbox python examples/16_self_host_sandbox/main.py
 
 # 或通过命令行参数传递
@@ -77,6 +90,7 @@ python examples/16_self_host_sandbox/main.py \
   --prompt "请在 /workspace 下创建一个 quick_sort.py 并运行验证"
 ```
 
+
 未提供 `--session-id` 时，`ShortTermMemory.after_create_session_callback` 会先通过
 `POST /v1/sessions` 创建远端 Session。每次被拦截的工具调用都会向
 `POST /v1/sessions/{id}/events` 投递 `agent.tool_use`。Worker 消费事件、执行
@@ -86,3 +100,12 @@ bash，并写回匹配的 `user.tool_result`。
 事件的 `id` 直接使用 VeADK 的 function call ID；Worker 必须将它作为
 `tool_use_id` 原样回传。
 
+## 开发验证
+
+如果仓库虚拟环境仅安装了运行时依赖，其中可能没有 `pytest`。请先同步开发依赖组，
+再运行 Runtime Provider 的定向测试：
+
+```bash
+uv sync --group dev --extra sandbox
+uv run pytest -q tests/runtime/test_runtime_provider.py
+```

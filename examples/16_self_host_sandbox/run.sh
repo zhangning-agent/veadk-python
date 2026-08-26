@@ -4,14 +4,48 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# Ensure veadk is always imported directly from this local repository
-export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
+# Ensure veadk and example root are in PYTHONPATH
+export PYTHONPATH="$REPO_ROOT:$SCRIPT_DIR:${PYTHONPATH:-}"
 
-# Check .env existence
-if [ ! -f "$SCRIPT_DIR/.env" ]; then
+# Load .env if present
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+else
     echo "⚠️  未检测到 $SCRIPT_DIR/.env 配置文件。"
     if [ -f "$SCRIPT_DIR/.env.example" ]; then
         echo "💡 提示：请先执行 'cp $SCRIPT_DIR/.env.example $SCRIPT_DIR/.env' 并配置相应密钥。"
+    fi
+fi
+
+PORT="${PORT:-8067}"
+
+# Check if web mode is requested
+if [ "${1:-}" = "--web" ]; then
+    shift
+    PORT_ARGS=()
+    CORS_ARGS=()
+    if [[ ! " $* " =~ " --port " ]]; then
+        PORT_ARGS=(--port "$PORT")
+    fi
+    if [[ ! " $* " =~ " --allow_origins " ]] && [ -n "${ALLOW_ORIGINS:-}" ]; then
+        IFS=',' read -r -a CONFIGURED_ORIGINS <<< "$ALLOW_ORIGINS"
+        for origin in "${CONFIGURED_ORIGINS[@]}"; do
+            CORS_ARGS+=(--allow_origins "$origin")
+        done
+    fi
+    echo "🌐 正在启动 VeADK Web 调试界面 (端口: ${PORT})..."
+    # Switch into agents directory so veadk web detects self_host_sandbox_agent
+    cd "$SCRIPT_DIR/agents"
+    if [ -x "$REPO_ROOT/.venv/bin/veadk" ]; then
+        exec "$REPO_ROOT/.venv/bin/veadk" web "${PORT_ARGS[@]}" "${CORS_ARGS[@]}" "$@"
+    elif command -v uv >/dev/null 2>&1; then
+        exec uv run --directory "$REPO_ROOT" --extra sandbox veadk web "${PORT_ARGS[@]}" "${CORS_ARGS[@]}" "$@"
+    elif command -v veadk >/dev/null 2>&1; then
+        exec veadk web "${PORT_ARGS[@]}" "${CORS_ARGS[@]}" "$@"
+    else
+        exec python3 -m veadk.cli.cli web "${PORT_ARGS[@]}" "${CORS_ARGS[@]}" "$@"
     fi
 fi
 

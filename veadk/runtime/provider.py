@@ -76,14 +76,23 @@ class RuntimeProvider(BasePlugin, ABC):
         self,
         *,
         tool: "BaseTool",
-        tool_args: dict[str, Any],
+        tool_args: dict[str, Any] | None = None,
+        args: dict[str, Any] | None = None,
         tool_context: "ToolContext",
     ) -> dict[str, Any]:
-        """Route the call before ADK invokes the tool implementation."""
+        """Route the call before ADK invokes the tool implementation.
+
+        ADK plugin callbacks pass tool arguments as ``tool_args``, while
+        canonical agent callbacks pass the same value as ``args``. Runtime
+        providers support both callback paths.
+        """
+        if tool_args is not None and args is not None and tool_args != args:
+            raise ValueError("tool_args and args must match when both are provided")
+        resolved_args = tool_args if tool_args is not None else (args or {})
         result = await self.execute(
             ToolCall(
                 name=tool.name,
-                arguments=tool_args,
+                arguments=resolved_args,
                 tool=tool,
                 context=tool_context,
             )

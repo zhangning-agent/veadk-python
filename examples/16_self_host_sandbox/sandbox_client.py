@@ -345,7 +345,7 @@ class SelfHostSandboxClient:
     ) -> Dict[str, Any]:
         """Publish ``agent.tool_use`` and wait for the Worker's tool result."""
         if not self.session_id:
-            raise RuntimeError("Cannot dispatch bash before a Session is created.")
+            self.create_session()
 
         timeout_seconds = timeout or float(self.timeout)
         command = html.unescape(command)

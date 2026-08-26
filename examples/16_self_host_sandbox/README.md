@@ -55,16 +55,29 @@ export X_TOP_ACCOUNT_ID="your-account-id"
 
 ### 2. Run the Demo
 
-You can run the demo directly with the provided `run.sh` script (which uses `uv` automatically):
+#### Option A: Web UI Mode (`veadk web`)
+
+Run the visual web debugging interface in your browser (defaults to port **8067**, configurable via `PORT` in `.env` or `--port`):
 
 ```bash
-bash examples/16_self_host_sandbox/run.sh
+# Via run.sh helper (automatically switches to agents dir and applies port 8067)
+bash examples/16_self_host_sandbox/run.sh --web
+
+# Or directly in the agents directory
+cd examples/16_self_host_sandbox/agents
+veadk web --port 8067
 ```
 
-Or using `uv run` / `python`:
+
+
+
+#### Option B: CLI Mode
 
 ```bash
-# Using uv
+# Run with run.sh helper
+bash examples/16_self_host_sandbox/run.sh
+
+# Or using uv
 uv run --extra sandbox python examples/16_self_host_sandbox/main.py
 
 # Or passing CLI arguments
@@ -75,6 +88,7 @@ python examples/16_self_host_sandbox/main.py \
   --prompt "Create a Python script in /workspace and run it with pytest."
 ```
 
+
 If `--session-id` is omitted, `ShortTermMemory.after_create_session_callback`
 creates the remote session through `POST /v1/sessions`. Each intercepted tool
 posts an `agent.tool_use` to `POST /v1/sessions/{id}/events`. The Worker consumes
@@ -84,3 +98,13 @@ The example does not post tool tasks as `user.message`, and it does not expect a
 remote LLM to create a second tool call. The event's `id` is the VeADK function
 call ID and must be returned by the Worker as `tool_use_id`.
 
+## Development verification
+
+The repository virtual environment may omit test dependencies when it was
+created for runtime use only. Install the development dependency group before
+running the focused runtime-provider tests:
+
+```bash
+uv sync --group dev --extra sandbox
+uv run pytest -q tests/runtime/test_runtime_provider.py
+```
