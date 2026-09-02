@@ -14,7 +14,10 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
     declare -A EXPLICIT_ENV=()
     for key in \
         ANTHROPIC_BASE_URL ANTHROPIC_ENVIRONMENT_ID ANTHROPIC_ENVIRONMENT_KEY \
-        SANDBOX_AGENT_ID X_TOP_ACCOUNT_ID SANDBOX_TIMEOUT_SECONDS PORT; do
+        SANDBOX_AGENT_ID X_TOP_ACCOUNT_ID SANDBOX_TIMEOUT_SECONDS PORT \
+        TOOL_FEISHU_CHANNEL_APP_ID TOOL_FEISHU_CHANNEL_APP_SECRET \
+        TOOL_FEISHU_CHANNEL_TRANSPORT TOOL_FEISHU_CHANNEL_STREAMING \
+        TOOL_FEISHU_CHANNEL_REACTIONS; do
         if [[ -v $key ]]; then
             EXPLICIT_ENV[$key]="${!key}"
         fi
@@ -34,6 +37,11 @@ else
 fi
 
 PORT="${PORT:-8067}"
+
+if [ "${1:-}" = "--feishu" ]; then
+    shift
+    set -- --feishu "$@"
+fi
 
 # Check if web mode is requested
 if [ "${1:-}" = "--web" ]; then

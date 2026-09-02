@@ -14,7 +14,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY veadk ./veadk
 COPY frontend ./frontend
-RUN uv sync --frozen --no-dev --extra sandbox
+RUN uv sync --frozen --no-dev --extra sandbox --extra extensions
 
 COPY examples/16_self_host_sandbox ./examples/16_self_host_sandbox
 RUN chmod +x ./examples/16_self_host_sandbox/run.sh \
@@ -25,4 +25,3 @@ USER veadk
 EXPOSE 8067
 
 CMD ["bash", "examples/16_self_host_sandbox/run.sh", "--web", "--host", "0.0.0.0", "--port", "8067"]
-

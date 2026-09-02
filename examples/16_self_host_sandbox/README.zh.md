@@ -86,6 +86,29 @@ python examples/16_self_host_sandbox/main.py \
   --prompt "请在 /workspace 下创建一个 quick_sort.py 并运行验证"
 ```
 
+#### 方式三：飞书机器人常驻模式
+
+在飞书开放平台为机器人启用 WebSocket 长连接，并订阅接收消息事件。然后在 `.env`
+中配置：
+
+```bash
+TOOL_FEISHU_CHANNEL_APP_ID=cli_your_feishu_app_id
+TOOL_FEISHU_CHANNEL_APP_SECRET=your_feishu_app_secret
+TOOL_FEISHU_CHANNEL_TRANSPORT=ws
+TOOL_FEISHU_CHANNEL_STREAMING=false
+TOOL_FEISHU_CHANNEL_REACTIONS=true
+```
+
+启动常驻进程：
+
+```bash
+bash examples/16_self_host_sandbox/run.sh --feishu
+```
+
+进程会保持飞书 WebSocket 连接，断开后自动重连。飞书用户和会话分别映射为
+VeADK 的 `user_id` 和 `session_id`，因此同一个飞书会话会复用上下文。使用
+`Ctrl+C` 或发送 `SIGTERM` 时，进程会停止接收新消息，并等待在途回复完成后退出。
+
 
 每个新建的 VeADK Session 都通过 `POST /v1/sessions` 创建一个远端 Managed
 Session。用户消息和模型循环留在 VeADK；`DispatchRuntimeProvider` 拦截模型生成的

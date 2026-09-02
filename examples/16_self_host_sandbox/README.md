@@ -86,6 +86,30 @@ python examples/16_self_host_sandbox/main.py \
   --prompt "Create a Python script in /workspace and run it with pytest."
 ```
 
+#### Option C: Long-running Feishu bot channel
+
+Enable the bot's WebSocket connection and message event subscription in the
+Feishu developer console, then configure `.env`:
+
+```bash
+TOOL_FEISHU_CHANNEL_APP_ID=cli_your_feishu_app_id
+TOOL_FEISHU_CHANNEL_APP_SECRET=your_feishu_app_secret
+TOOL_FEISHU_CHANNEL_TRANSPORT=ws
+TOOL_FEISHU_CHANNEL_STREAMING=false
+TOOL_FEISHU_CHANNEL_REACTIONS=true
+```
+
+Start the long-running process:
+
+```bash
+bash examples/16_self_host_sandbox/run.sh --feishu
+```
+
+The process keeps the Feishu WebSocket connected and reconnects automatically.
+Feishu users and conversations map to VeADK `user_id` and `session_id` values,
+so messages in the same conversation share context. `Ctrl+C` or `SIGTERM` stops
+new messages and drains in-flight replies before exiting.
+
 
 `ShortTermMemory.after_create_session_callback` creates one remote Managed Session
 for each newly created VeADK session. VeADK handles the user message and model

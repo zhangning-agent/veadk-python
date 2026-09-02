@@ -14,6 +14,7 @@
 
 import asyncio
 import importlib
+import importlib.util
 import sys
 import os
 from pathlib import Path
@@ -30,6 +31,13 @@ os.environ.setdefault("MODEL_AGENT_API_KEY", "test-model-api-key")
 
 agent_module = importlib.import_module("agents.self_host_sandbox_agent.agent")
 SandboxSessionManager = agent_module.SandboxSessionManager
+
+MAIN_SPEC = importlib.util.spec_from_file_location(
+    "self_host_sandbox_main", EXAMPLE_DIR / "main.py"
+)
+assert MAIN_SPEC and MAIN_SPEC.loader
+main_module = importlib.util.module_from_spec(MAIN_SPEC)
+MAIN_SPEC.loader.exec_module(main_module)
 
 
 class _FakeClient:
@@ -105,3 +113,36 @@ def test_dispatch_task_sends_only_the_model_tool_call(monkeypatch):
     assert result == {"stdout": "ok"}
     assert dispatched == [("bash", {"command": "printf ok"}, "tool-call-1")]
     assert not hasattr(agent_module.agent, "run_turn")
+
+
+def test_feishu_channel_stays_up_until_stopped_and_shuts_down(monkeypatch):
+    calls = []
+
+    class _FakeRunner:
+        def __init__(self, **kwargs):
+            calls.append(("runner", kwargs))
+
+    class _FakeChannel:
+        def __init__(self, *, runner):
+            calls.append(("channel", runner))
+
+        def start(self, loop):
+            calls.append(("start", loop))
+
+        async def shutdown(self):
+            calls.append(("shutdown", None))
+
+    monkeypatch.setattr(main_module, "Runner", _FakeRunner)
+    monkeypatch.setattr(main_module, "FeishuChannelExtension", _FakeChannel)
+    stop_event = asyncio.Event()
+    stop_event.set()
+
+    asyncio.run(main_module.serve_feishu_channel(stop_event))
+
+    assert calls[0] == (
+        "runner",
+        {"agent": main_module.agent, "app_name": "self_host_sandbox_demo"},
+    )
+    assert calls[1][0] == "channel"
+    assert calls[2][0] == "start"
+    assert calls[3] == ("shutdown", None)
