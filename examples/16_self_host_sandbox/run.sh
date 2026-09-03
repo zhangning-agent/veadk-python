@@ -7,6 +7,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # Ensure veadk and example root are in PYTHONPATH
 export PYTHONPATH="$REPO_ROOT:$SCRIPT_DIR:${PYTHONPATH:-}"
 
+# Ensure internal gateway domains bypass proxy by default
+DEFAULT_NO_PROXY=".volceapi.com,localhost,127.0.0.1,.byted.org,.bytedance.net,.volces.com"
+export no_proxy="${no_proxy:-$DEFAULT_NO_PROXY}"
+export NO_PROXY="${NO_PROXY:-$no_proxy}"
+
 # Load .env if present
 if [ -f "$SCRIPT_DIR/.env" ]; then
     # Treat .env as defaults. Explicit caller-provided values are useful for
@@ -17,7 +22,9 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
         SANDBOX_AGENT_ID X_TOP_ACCOUNT_ID SANDBOX_TIMEOUT_SECONDS PORT \
         TOOL_FEISHU_CHANNEL_APP_ID TOOL_FEISHU_CHANNEL_APP_SECRET \
         TOOL_FEISHU_CHANNEL_TRANSPORT TOOL_FEISHU_CHANNEL_STREAMING \
-        TOOL_FEISHU_CHANNEL_REACTIONS; do
+        TOOL_FEISHU_CHANNEL_REACTIONS TOOL_FEISHU_CHANNEL_SHOW_THINKING \
+        TOOL_FEISHU_CHANNEL_SHOW_TOOL_CALLS \
+        TOOL_FEISHU_CHANNEL_SHOW_TOOL_RESULTS; do
         if [[ -v $key ]]; then
             EXPLICIT_ENV[$key]="${!key}"
         fi

@@ -22,6 +22,7 @@ import pytest
 from veadk.extensions.feishu_channel import (
     FeishuChannelExtension,
     _call_in_fresh_event_loop,
+    _format_tool_payload,
 )
 
 
@@ -192,6 +193,80 @@ class FakeStreamingRunner:
         )
 
 
+def build_stream_event(
+    *,
+    partial=False,
+    parts=None,
+    calls=None,
+    responses=None,
+):
+    return SimpleNamespace(
+        partial=partial,
+        content=SimpleNamespace(parts=parts or []),
+        get_function_calls=lambda: calls or [],
+        get_function_responses=lambda: responses or [],
+    )
+
+
+class FakeDetailedStreamingRunner(FakeStreamingRunner):
+    async def run_async(self, user_id, session_id, new_message, run_config=None):
+        self.run_async_calls.append(
+            {
+                "user_id": user_id,
+                "session_id": session_id,
+                "new_message": new_message,
+                "run_config": run_config,
+            }
+        )
+        call = SimpleNamespace(
+            id="call-1",
+            name="bash",
+            args={"command": "printf ok", "api_key": "secret-value"},
+        )
+        response = SimpleNamespace(
+            id="call-1",
+            name="bash",
+            response={"output": "ok", "access_token": "secret-token"},
+        )
+        thinking = "The\noutput\nshows one item: skills.\nI'll report it."
+        yield build_stream_event(
+            partial=True,
+            parts=[SimpleNamespace(text="The\noutput\n", thought=True)],
+        )
+        yield build_stream_event(
+            partial=True,
+            parts=[
+                SimpleNamespace(
+                    text="shows one item: skills.\nI'll report it.", thought=True
+                )
+            ],
+        )
+        # Providers may repeat the accumulated thinking in a completed event.
+        yield build_stream_event(
+            parts=[SimpleNamespace(text=thinking, thought=True)],
+        )
+        yield build_stream_event(calls=[call])
+        yield build_stream_event(calls=[call])
+        yield build_stream_event(responses=[response])
+        yield build_stream_event(
+            partial=True,
+            parts=[SimpleNamespace(text="完成", thought=False)],
+        )
+        # Some providers insert an empty reasoning event immediately before
+        # repeating the completed answer.
+        yield build_stream_event(
+            partial=True,
+            parts=[SimpleNamespace(text="\n", thought=True)],
+        )
+        yield build_stream_event(
+            parts=[SimpleNamespace(text="完成", thought=False)],
+        )
+        yield build_stream_event(
+            partial=True,
+            parts=[SimpleNamespace(text=".", thought=True)],
+        )
+
+
 def build_message(**overrides):
     message = SimpleNamespace(
         id="om_001",
@@ -217,6 +292,23 @@ def build_message(**overrides):
     for key, value in overrides.items():
         setattr(message, key, value)
     return message
+
+
+def test_tool_payload_is_redacted_and_truncated():
+    rendered = _format_tool_payload(
+        {
+            "password": "do-not-show",
+            "nested": {"authorization": "Bearer secret"},
+            "output": "x" * 200,
+        },
+        max_length=100,
+    )
+
+    assert len(rendered) == 100
+    assert rendered.endswith("…")
+    assert "do-not-show" not in rendered
+    assert "Bearer secret" not in rendered
+    assert '"password": "***"' in rendered
 
 
 @pytest.mark.anyio
@@ -299,6 +391,40 @@ async def test_extension_streaming_uses_markdown_producer_controller():
     ]
     assert len(runner.run_async_calls) == 1
     assert channel.stream_calls == [("oc_chat", ["hel", "lo"], {"reply_to": "om_001"})]
+
+
+@pytest.mark.anyio
+async def test_extension_streams_thinking_tool_calls_results_and_answer():
+    runner = FakeDetailedStreamingRunner()
+    channel = FakeStreamChannel()
+    extension = FeishuChannelExtension(
+        runner=runner,
+        channel=channel,
+        streaming=True,
+        show_thinking=True,
+        show_tool_calls=True,
+        show_tool_results=True,
+    )
+
+    await extension._on_message(build_message())
+
+    assert len(channel.stream_calls) == 1
+    rendered = "".join(channel.stream_calls[0][1])
+    assert rendered.count("💭 **Thinking**") == 1
+    assert rendered.count("🔧 **调用工具 `bash`**") == 1
+    assert rendered.count("✅ **工具 `bash` 返回**") == 1
+    assert rendered.count("💬 **回答**") == 1
+    assert "The output shows one item: skills. I'll report it." in rendered
+    assert "The\noutput" not in rendered
+    assert rendered.count("完成") == 1
+    assert rendered.endswith("完成")
+    assert '"api_key": "***"' in rendered
+    assert '"access_token": "***"' in rendered
+    assert "secret-value" not in rendered
+    assert "secret-token" not in rendered
+    assert rendered.index("Thinking") < rendered.index("调用工具")
+    assert rendered.index("调用工具") < rendered.index("工具 `bash` 返回")
+    assert rendered.index("工具 `bash` 返回") < rendered.index("回答")
 
 
 @pytest.mark.anyio

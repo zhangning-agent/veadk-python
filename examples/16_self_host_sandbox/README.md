@@ -95,8 +95,11 @@ Feishu developer console, then configure `.env`:
 TOOL_FEISHU_CHANNEL_APP_ID=cli_your_feishu_app_id
 TOOL_FEISHU_CHANNEL_APP_SECRET=your_feishu_app_secret
 TOOL_FEISHU_CHANNEL_TRANSPORT=ws
-TOOL_FEISHU_CHANNEL_STREAMING=false
+TOOL_FEISHU_CHANNEL_STREAMING=true
 TOOL_FEISHU_CHANNEL_REACTIONS=true
+TOOL_FEISHU_CHANNEL_SHOW_THINKING=true
+TOOL_FEISHU_CHANNEL_SHOW_TOOL_CALLS=true
+TOOL_FEISHU_CHANNEL_SHOW_TOOL_RESULTS=true
 ```
 
 Start the long-running process:
@@ -109,6 +112,11 @@ The process keeps the Feishu WebSocket connected and reconnects automatically.
 Feishu users and conversations map to VeADK `user_id` and `session_id` values,
 so messages in the same conversation share context. `Ctrl+C` or `SIGTERM` stops
 new messages and drains in-flight replies before exiting.
+
+This demo streams model-provided thinking summaries, every tool call and its
+result, and the final answer into the same Feishu Markdown card. Thinking is
+shown only when the configured model/provider emits it. Tool payloads are
+redacted for common credential fields and truncated to keep the card bounded.
 
 
 `ShortTermMemory.after_create_session_callback` creates one remote Managed Session

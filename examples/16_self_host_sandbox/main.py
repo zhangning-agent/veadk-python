@@ -30,7 +30,13 @@ APP_NAME = "self_host_sandbox_demo"
 async def serve_feishu_channel(stop_event: asyncio.Event | None = None) -> None:
     """Serve Feishu conversations until the process receives a stop signal."""
     runner = Runner(agent=agent, app_name=APP_NAME)
-    channel = FeishuChannelExtension(runner=runner)
+    channel = FeishuChannelExtension(
+        runner=runner,
+        streaming=True,
+        show_thinking=True,
+        show_tool_calls=True,
+        show_tool_results=True,
+    )
     loop = asyncio.get_running_loop()
     shutdown_event = stop_event or asyncio.Event()
 

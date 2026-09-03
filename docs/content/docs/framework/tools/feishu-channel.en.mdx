@@ -37,6 +37,9 @@ Environment variables:
 - `TOOL_FEISHU_CHANNEL_TRANSPORT`: defaults to `ws`
 - `TOOL_FEISHU_CHANNEL_STREAMING`: whether to enable streaming output, defaults to `false`
 - `TOOL_FEISHU_CHANNEL_REACTIONS`: whether to reply with a "received" reaction on incoming messages, defaults to `false`
+- `TOOL_FEISHU_CHANNEL_SHOW_THINKING`: whether to show model-provided thinking summaries, defaults to `false`
+- `TOOL_FEISHU_CHANNEL_SHOW_TOOL_CALLS`: whether to show tool names and arguments, defaults to `false`
+- `TOOL_FEISHU_CHANNEL_SHOW_TOOL_RESULTS`: whether to show tool results, defaults to `false`
 
 Or configure in `config.yaml`:
 
@@ -48,6 +51,9 @@ tool:
     transport: ws
     streaming: true
     reactions: true
+    show_thinking: true
+    show_tool_calls: true
+    show_tool_results: true
 ```
 
 ## Minimal example
@@ -75,6 +81,10 @@ runner = Runner(
 channel = FeishuChannelExtension(
     runner=runner,
     channel_kwargs={"transport": "ws"},
+    streaming=True,
+    show_thinking=True,
+    show_tool_calls=True,
+    show_tool_results=True,
 )
 
 
@@ -91,3 +101,5 @@ if __name__ == "__main__":
 - The Feishu `Channel` WebSocket mode is used by default, so as long as the bot has subscribed to message events, you can start the connection directly.
 - By default replies use `reply_to=<original message_id>`, keeping VeADK output attached to the current Feishu message thread.
 - Override the default identity mapping via `session_id_factory` and `user_id_factory`.
+- Thinking includes only summaries emitted by the model or provider; hidden internal chain-of-thought is not available.
+- Common credential fields in tool arguments and results are redacted, and each detail block is limited to 4,000 characters by default.
