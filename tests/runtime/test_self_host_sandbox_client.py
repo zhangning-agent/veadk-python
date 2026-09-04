@@ -41,6 +41,20 @@ def _client():
     )
 
 
+def test_injected_anthropic_session_id_takes_precedence(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_SESSION_ID", "session-from-work-item")
+    monkeypatch.setenv("SANDBOX_SESSION_ID", "legacy-session")
+
+    client = SelfHostSandboxClient(
+        base_url="https://sandbox.example.com",
+        environment_id="env-123",
+        agent_id="agent-123",
+        bearer_token="token",
+    )
+
+    assert client.session_id == "session-from-work-item"
+
+
 def test_execute_command_posts_agent_tool_use_and_correlates_worker_result(
     monkeypatch,
 ):
@@ -91,7 +105,13 @@ def test_execute_command_posts_agent_tool_use_and_correlates_worker_result(
                 "timeout_ms": 5000,
                 "timeout": 5000,
             },
-        }
+        },
+        {
+            "type": "agent.tool_result",
+            "tool_use_id": "call-123",
+            "content": "exit=0\nhello\n",
+            "is_error": False,
+        },
     ]
     assert result == {
         "dispatch_id": "call-123",

@@ -66,7 +66,11 @@ class SelfHostSandboxClient:
         self.agent_id = agent_id or os.getenv(
             "SANDBOX_AGENT_ID", "agent_011CSd8hFhXGpz33bM1pBw7y"
         )
-        self.session_id = session_id or os.getenv("SANDBOX_SESSION_ID")
+        self.session_id = (
+            session_id
+            or os.getenv("ANTHROPIC_SESSION_ID")
+            or os.getenv("SANDBOX_SESSION_ID")
+        )
 
         raw_token = (
             bearer_token
@@ -101,10 +105,20 @@ class SelfHostSandboxClient:
         if self.account_id:
             default_headers["X-Top-Account-Id"] = str(self.account_id)
 
+        self._default_headers = default_headers
         self.client = anthropic.Anthropic(
             base_url=self.base_url,
             auth_token=self.bearer_token,
             default_headers=default_headers,
+            timeout=float(self.timeout),
+        )
+
+    def create_async_client(self) -> anthropic.AsyncAnthropic:
+        """Create an async SDK client for the Agent Loop event stream."""
+        return anthropic.AsyncAnthropic(
+            base_url=self.base_url,
+            auth_token=self.bearer_token,
+            default_headers=self._default_headers,
             timeout=float(self.timeout),
         )
 
@@ -114,7 +128,8 @@ class SelfHostSandboxClient:
     ) -> Dict[str, Any]:
         """POST /v1/sessions via Anthropic SDK (client.beta.sessions.create).
 
-        Creates a session and enqueues a work item into managed_selfhost_work_items.
+        This only creates the session. A real ``user.message`` event causes the
+        server control plane to enqueue the corresponding WorkItem.
         """
         sess = self.client.beta.sessions.create(
             agent=self.agent_id,
@@ -393,11 +408,23 @@ class SelfHostSandboxClient:
                     continue
                 result_tool_use_id = str(event.get("tool_use_id") or "")
                 if result_tool_use_id == tool_use_id:
-                    return self._normalize_bash_result(
+                    result = self._normalize_bash_result(
                         event,
                         tool_use_id=tool_use_id,
                         dispatch_id=dispatch_id,
                     )
+                    if event_type == "user.tool_result":
+                        self.post_events(
+                            [
+                                {
+                                    "type": "agent.tool_result",
+                                    "tool_use_id": tool_use_id,
+                                    "content": event.get("content") or "",
+                                    "is_error": bool(event.get("is_error")),
+                                }
+                            ]
+                        )
+                    return result
             time.sleep(0.5)
 
         raise TimeoutError(

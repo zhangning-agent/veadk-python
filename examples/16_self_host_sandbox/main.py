@@ -20,6 +20,9 @@ import signal
 import uuid
 
 from agents.self_host_sandbox_agent.agent import agent, enable_sandbox_turn_lifecycle
+from agents.self_host_sandbox_agent.agent import sandbox_sessions
+from managed_agent_loop import ManagedAgentsLoop
+from sandbox_client import SelfHostSandboxClient
 from veadk import Runner
 from veadk.extensions import FeishuChannelExtension
 
@@ -69,11 +72,31 @@ async def main() -> None:
     )
     parser.add_argument("--session-id", default=None)
     parser.add_argument(
+        "--managed-agent-loop",
+        action="store_true",
+        help="Consume one pending user.message from the existing Managed Session, then exit.",
+    )
+    parser.add_argument(
         "--feishu",
         action="store_true",
         help="Keep running and serve conversations through the Feishu bot channel.",
     )
     args = parser.parse_args()
+
+    if args.managed_agent_loop:
+        session_client = SelfHostSandboxClient(session_id=args.session_id)
+        if not session_client.session_id:
+            parser.error(
+                "--managed-agent-loop requires --session-id, ANTHROPIC_SESSION_ID, or SANDBOX_SESSION_ID"
+            )
+        sandbox_sessions.bind(session_client.session_id, session_client)
+        runner = Runner(agent=agent, app_name=APP_NAME)
+        turns = await ManagedAgentsLoop(
+            runner=runner,
+            session_client=session_client,
+        ).run(max_turns=1)
+        print(f"Managed Agents loop completed {turns} turn(s).")
+        return
 
     if args.feishu:
         await serve_feishu_channel()

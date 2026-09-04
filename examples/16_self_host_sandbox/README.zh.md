@@ -119,6 +119,35 @@ VeADK 的 `user_id` 和 `session_id`，因此同一个飞书会话会复用上�
 一张独立卡片。没有产生的阶段不会创建空卡片。工具参数和结果会自动脱敏并截断，
 避免单张卡片超出飞书限制。
 
+#### 方式四：Managed Agents Agent Loop 模式
+
+该模式不创建新 Session，也不发送伪造的唤醒消息。控制面收到真实
+`user.message` 后创建 WorkItem，沙箱启动时将对应 Session ID 注入
+`ANTHROPIC_SESSION_ID`。VEADK 监听该 Session 的 SDK SSE，处理一轮后写入
+`session.status_idle` 并退出：
+
+```bash
+export ANTHROPIC_SESSION_ID="session_existing_managed_session"
+bash examples/16_self_host_sandbox/run.sh --managed-agent-loop
+```
+
+Agent Loop 的监听和所有写入都使用扩展后的 Anthropic Python SDK：
+`client.beta.sessions.events.stream()` 与 `events.send()`。本地开发时可将修改后的
+SDK 以 editable 方式装入本仓库虚拟环境：
+
+```bash
+uv pip install --python .venv/bin/python -e \
+  /home/mofanke/github/agent-ma/anthropic-sdk-python
+```
+
+无需真实服务即可运行 SDK → HTTP/SSE → VEADK Loop 的完整联调脚本：
+
+```bash
+PYTHONPATH=/home/mofanke/github/agent-ma/anthropic-sdk-python/src:$PWD \
+  uv run --extra sandbox python \
+  examples/16_self_host_sandbox/local_agent_loop_test.py
+```
+
 
 每个新建的 VeADK Session 都通过 `POST /v1/sessions` 创建一个远端 Managed
 Session。用户消息和模型循环留在 VeADK；`DispatchRuntimeProvider` 拦截模型生成的
@@ -170,5 +199,6 @@ kubectl rollout status deployment/veadk-self-host-sandbox
 ```bash
 uv sync --group dev --extra sandbox
 uv run pytest -q tests/runtime/test_self_host_sandbox_client.py \
-  tests/runtime/test_self_host_sandbox_agent.py
+  tests/runtime/test_self_host_sandbox_agent.py \
+  tests/runtime/test_managed_agent_loop.py
 ```

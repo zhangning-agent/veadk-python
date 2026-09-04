@@ -122,6 +122,35 @@ result, and a separate final-answer card. Missing stages do not create empty
 cards. Tool payloads are redacted for common credential fields and truncated
 to keep each card bounded.
 
+#### Option D: Managed Agents Agent Loop
+
+This mode neither creates another Session nor posts a synthetic wake-up message.
+The control plane creates a WorkItem for a real `user.message` and injects its
+Session ID as `ANTHROPIC_SESSION_ID` when the sandbox starts. VeADK consumes that
+Session through SDK SSE, handles one turn, writes `session.status_idle`, and exits:
+
+```bash
+export ANTHROPIC_SESSION_ID="session_existing_managed_session"
+bash examples/16_self_host_sandbox/run.sh --managed-agent-loop
+```
+
+Both listening and every Agent Loop write use the extended Anthropic Python SDK:
+`client.beta.sessions.events.stream()` and `events.send()`. For local development,
+install the modified SDK checkout into this repository's virtual environment:
+
+```bash
+uv pip install --python .venv/bin/python -e \
+  /home/mofanke/github/agent-ma/anthropic-sdk-python
+```
+
+Run the complete SDK → HTTP/SSE → VeADK Loop test without real credentials:
+
+```bash
+PYTHONPATH=/home/mofanke/github/agent-ma/anthropic-sdk-python/src:$PWD \
+  uv run --extra sandbox python \
+  examples/16_self_host_sandbox/local_agent_loop_test.py
+```
+
 
 `ShortTermMemory.after_create_session_callback` creates one remote Managed Session
 for each newly created VeADK session. VeADK handles the user message and model
@@ -177,5 +206,6 @@ running the focused dispatch tests:
 ```bash
 uv sync --group dev --extra sandbox
 uv run pytest -q tests/runtime/test_self_host_sandbox_client.py \
-  tests/runtime/test_self_host_sandbox_agent.py
+  tests/runtime/test_self_host_sandbox_agent.py \
+  tests/runtime/test_managed_agent_loop.py
 ```
