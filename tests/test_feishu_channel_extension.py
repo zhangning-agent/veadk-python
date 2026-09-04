@@ -59,7 +59,8 @@ class FakeStreamChannel(FakeChannel):
     async def stream(self, chat_id, spec, options=None):
         controller = FakeStreamController()
         await spec["markdown"](controller)
-        self.stream_calls.append((chat_id, controller.chunks, options))
+        if controller.chunks:
+            self.stream_calls.append((chat_id, controller.chunks, options))
 
 
 class FakeBlockingChannel(FakeChannel):
@@ -267,6 +268,46 @@ class FakeDetailedStreamingRunner(FakeStreamingRunner):
         )
 
 
+class FakeSeparateToolCardRunner(FakeStreamingRunner):
+    async def run_async(self, user_id, session_id, new_message, run_config=None):
+        calls = [
+            SimpleNamespace(id="call-1", name="bash", args={"command": "one"}),
+            SimpleNamespace(id="call-2", name="python", args={"code": "two"}),
+        ]
+        responses = [
+            SimpleNamespace(
+                id="call-2",
+                name="python",
+                response={"status": "failed", "error": "bad"},
+            ),
+            SimpleNamespace(
+                id="call-1",
+                name="bash",
+                response={"output": "ok"},
+            ),
+        ]
+        yield build_stream_event(calls=calls)
+        yield build_stream_event(calls=calls)
+        yield build_stream_event(responses=responses)
+        yield build_stream_event(responses=responses)
+        yield build_stream_event(
+            partial=True,
+            parts=[SimpleNamespace(text="done", thought=False)],
+        )
+
+
+class FakeToolOnlyRunner(FakeStreamingRunner):
+    async def run_async(self, user_id, session_id, new_message, run_config=None):
+        call = SimpleNamespace(id="call-1", name="bash", args={"command": "one"})
+        response = SimpleNamespace(
+            id="call-1",
+            name="bash",
+            response={"output": "ok"},
+        )
+        yield build_stream_event(calls=[call])
+        yield build_stream_event(responses=[response])
+
+
 def build_message(**overrides):
     message = SimpleNamespace(
         id="om_001",
@@ -311,6 +352,18 @@ def test_tool_payload_is_redacted_and_truncated():
     assert '"password": "***"' in rendered
 
 
+def test_separate_cards_and_topic_can_be_enabled_from_environment(monkeypatch):
+    monkeypatch.setenv("TOOL_FEISHU_CHANNEL_SEPARATE_TOOL_CALL_CARDS", "true")
+    monkeypatch.setenv("TOOL_FEISHU_CHANNEL_SEPARATE_THINKING_CARD", "true")
+    monkeypatch.setenv("TOOL_FEISHU_CHANNEL_CREATE_TOPIC", "true")
+
+    extension = FeishuChannelExtension(runner=FakeRunner(), channel=FakeChannel())
+
+    assert extension.separate_tool_call_cards is True
+    assert extension.separate_thinking_card is True
+    assert extension.create_topic is True
+
+
 @pytest.mark.anyio
 async def test_extension_uses_union_id_and_thread_id():
     runner = FakeRunner()
@@ -336,7 +389,11 @@ async def test_extension_uses_union_id_and_thread_id():
         }
     ]
     assert channel.sent_messages == [
-        ("oc_chat", {"text": "echo:你好"}, {"reply_to": "om_001"})
+        (
+            "oc_chat",
+            {"text": "echo:你好"},
+            {"reply_to": "om_001", "reply_in_thread": True},
+        )
     ]
 
 
@@ -425,6 +482,103 @@ async def test_extension_streams_thinking_tool_calls_results_and_answer():
     assert rendered.index("Thinking") < rendered.index("调用工具")
     assert rendered.index("调用工具") < rendered.index("工具 `bash` 返回")
     assert rendered.index("工具 `bash` 返回") < rendered.index("回答")
+
+
+@pytest.mark.anyio
+async def test_extension_streams_each_tool_call_and_result_in_separate_card():
+    runner = FakeSeparateToolCardRunner()
+    channel = FakeStreamChannel()
+    extension = FeishuChannelExtension(
+        runner=runner,
+        channel=channel,
+        streaming=True,
+        show_tool_calls=True,
+        show_tool_results=True,
+        separate_tool_call_cards=True,
+    )
+
+    await extension._on_message(build_message())
+
+    assert len(channel.stream_calls) == 3
+    rendered_cards = ["".join(call[1]) for call in channel.stream_calls]
+    bash_card = next(card for card in rendered_cards if "`bash`" in card)
+    python_card = next(card for card in rendered_cards if "`python`" in card)
+    answer_card = next(card for card in rendered_cards if card == "done")
+
+    assert bash_card.count("🔧 **调用工具 `bash`**") == 1
+    assert bash_card.count("✅ **工具 `bash` 返回**") == 1
+    assert '"command": "one"' in bash_card
+    assert '"output": "ok"' in bash_card
+    assert "python" not in bash_card
+
+    assert python_card.count("🔧 **调用工具 `python`**") == 1
+    assert python_card.count("❌ **工具 `python` 返回**") == 1
+    assert '"code": "two"' in python_card
+    assert '"error": "bad"' in python_card
+    assert "bash" not in python_card
+    assert answer_card == "done"
+
+
+@pytest.mark.anyio
+async def test_extension_streams_thinking_tools_and_answer_as_topic_cards():
+    runner = FakeDetailedStreamingRunner()
+    channel = FakeStreamChannel()
+    extension = FeishuChannelExtension(
+        runner=runner,
+        channel=channel,
+        streaming=True,
+        show_thinking=True,
+        show_tool_calls=True,
+        show_tool_results=True,
+        separate_tool_call_cards=True,
+        separate_thinking_card=True,
+        create_topic=True,
+    )
+
+    await extension._on_message(build_message())
+
+    assert len(channel.stream_calls) == 3
+    rendered_cards = ["".join(call[1]) for call in channel.stream_calls]
+    thinking_card = next(card for card in rendered_cards if "Thinking" in card)
+    tool_card = next(card for card in rendered_cards if "`bash`" in card)
+    answer_card = next(card for card in rendered_cards if card == "完成")
+
+    assert "The output shows one item: skills. I'll report it." in thinking_card
+    assert "调用工具" not in thinking_card
+    assert "回答" not in thinking_card
+    assert tool_card.count("🔧 **调用工具 `bash`**") == 1
+    assert tool_card.count("✅ **工具 `bash` 返回**") == 1
+    assert "Thinking" not in tool_card
+    assert answer_card == "完成"
+    assert all(
+        call[2] == {"reply_to": "om_001", "reply_in_thread": True}
+        for call in channel.stream_calls
+    )
+
+
+@pytest.mark.anyio
+async def test_extension_does_not_create_cards_for_missing_stages():
+    channel = FakeStreamChannel()
+    extension = FeishuChannelExtension(
+        runner=FakeToolOnlyRunner(),
+        channel=channel,
+        streaming=True,
+        show_thinking=True,
+        show_tool_calls=True,
+        show_tool_results=True,
+        separate_tool_call_cards=True,
+        separate_thinking_card=True,
+        create_topic=True,
+    )
+
+    await extension._on_message(build_message())
+
+    assert len(channel.stream_calls) == 1
+    rendered = "".join(channel.stream_calls[0][1])
+    assert "🔧 **调用工具 `bash`**" in rendered
+    assert "✅ **工具 `bash` 返回**" in rendered
+    assert "Thinking" not in rendered
+    assert "回答" not in rendered
 
 
 @pytest.mark.anyio

@@ -36,6 +36,9 @@ async def serve_feishu_channel(stop_event: asyncio.Event | None = None) -> None:
         show_thinking=True,
         show_tool_calls=True,
         show_tool_results=True,
+        separate_tool_call_cards=True,
+        separate_thinking_card=True,
+        create_topic=True,
     )
     loop = asyncio.get_running_loop()
     shutdown_event = stop_event or asyncio.Event()

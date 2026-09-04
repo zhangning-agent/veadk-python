@@ -123,8 +123,8 @@ def test_feishu_channel_stays_up_until_stopped_and_shuts_down(monkeypatch):
             calls.append(("runner", kwargs))
 
     class _FakeChannel:
-        def __init__(self, *, runner):
-            calls.append(("channel", runner))
+        def __init__(self, *, runner, **kwargs):
+            calls.append(("channel", runner, kwargs))
 
         def start(self, loop):
             calls.append(("start", loop))
@@ -144,5 +144,15 @@ def test_feishu_channel_stays_up_until_stopped_and_shuts_down(monkeypatch):
         {"agent": main_module.agent, "app_name": "self_host_sandbox_demo"},
     )
     assert calls[1][0] == "channel"
+    assert isinstance(calls[1][1], _FakeRunner)
+    assert calls[1][2] == {
+        "streaming": True,
+        "show_thinking": True,
+        "show_tool_calls": True,
+        "show_tool_results": True,
+        "separate_tool_call_cards": True,
+        "separate_thinking_card": True,
+        "create_topic": True,
+    }
     assert calls[2][0] == "start"
     assert calls[3] == ("shutdown", None)

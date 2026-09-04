@@ -100,6 +100,9 @@ TOOL_FEISHU_CHANNEL_REACTIONS=true
 TOOL_FEISHU_CHANNEL_SHOW_THINKING=true
 TOOL_FEISHU_CHANNEL_SHOW_TOOL_CALLS=true
 TOOL_FEISHU_CHANNEL_SHOW_TOOL_RESULTS=true
+TOOL_FEISHU_CHANNEL_SEPARATE_TOOL_CALL_CARDS=true
+TOOL_FEISHU_CHANNEL_SEPARATE_THINKING_CARD=true
+TOOL_FEISHU_CHANNEL_CREATE_TOPIC=true
 ```
 
 Start the long-running process:
@@ -113,10 +116,11 @@ Feishu users and conversations map to VeADK `user_id` and `session_id` values,
 so messages in the same conversation share context. `Ctrl+C` or `SIGTERM` stops
 new messages and drains in-flight replies before exiting.
 
-This demo streams model-provided thinking summaries, every tool call and its
-result, and the final answer into the same Feishu Markdown card. Thinking is
-shown only when the configured model/provider emits it. Tool payloads are
-redacted for common credential fields and truncated to keep the card bounded.
+For each user message, this demo creates a Feishu topic containing one thinking
+card when thinking is available, one dedicated card for every tool call and its
+result, and a separate final-answer card. Missing stages do not create empty
+cards. Tool payloads are redacted for common credential fields and truncated
+to keep each card bounded.
 
 
 `ShortTermMemory.after_create_session_callback` creates one remote Managed Session

@@ -40,6 +40,9 @@ pip install lark-oapi
 - `TOOL_FEISHU_CHANNEL_SHOW_THINKING`：是否展示模型提供的思考摘要，默认 `false`
 - `TOOL_FEISHU_CHANNEL_SHOW_TOOL_CALLS`：是否展示工具名称和参数，默认 `false`
 - `TOOL_FEISHU_CHANNEL_SHOW_TOOL_RESULTS`：是否展示工具执行结果，默认 `false`
+- `TOOL_FEISHU_CHANNEL_SEPARATE_TOOL_CALL_CARDS`：每次工具调用及其结果是否使用独立卡片，默认 `false`
+- `TOOL_FEISHU_CHANNEL_SEPARATE_THINKING_CARD`：是否将思考摘要放入独立卡片，默认 `false`
+- `TOOL_FEISHU_CHANNEL_CREATE_TOPIC`：是否围绕用户消息创建话题并将本次回复的所有卡片发送到该话题，默认 `false`
 
 或在 `config.yaml` 中配置：
 
@@ -54,6 +57,9 @@ tool:
     show_thinking: true
     show_tool_calls: true
     show_tool_results: true
+    separate_tool_call_cards: true
+    separate_thinking_card: true
+    create_topic: true
 ```
 
 ## 最小示例

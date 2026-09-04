@@ -49,17 +49,17 @@ def test_run_sh_help_flag_executes_successfully():
 def test_run_sh_preserves_explicit_environment_variables(tmp_path):
     # Verify caller-provided env vars override defaults loaded from .env
     test_script = (
-        'set -euo pipefail\n'
+        "set -euo pipefail\n"
         f'SCRIPT_DIR="{RUN_SH.parent}"\n'
-        'declare -A EXPLICIT_ENV=()\n'
-        'for key in ANTHROPIC_BASE_URL ANTHROPIC_ENVIRONMENT_ID; do\n'
+        "declare -A EXPLICIT_ENV=()\n"
+        "for key in ANTHROPIC_BASE_URL ANTHROPIC_ENVIRONMENT_ID; do\n"
         '    if [[ -v $key ]]; then EXPLICIT_ENV[$key]="${!key}"; fi\n'
-        'done\n'
+        "done\n"
         'ANTHROPIC_BASE_URL="https://from-env-file.example.com"\n'
         'for key in "${!EXPLICIT_ENV[@]}"; do\n'
         '    printf -v "$key" \'%s\' "${EXPLICIT_ENV[$key]}"\n'
         '    export "$key"\n'
-        'done\n'
+        "done\n"
         'echo "URL=$ANTHROPIC_BASE_URL"\n'
     )
     env = os.environ.copy()
