@@ -28,6 +28,7 @@ if str(EXAMPLE_DIR) not in sys.path:
 os.environ.setdefault("ANTHROPIC_BASE_URL", "https://sandbox.example.com")
 os.environ.setdefault("ANTHROPIC_ENVIRONMENT_KEY", "test-token")
 os.environ.setdefault("MODEL_AGENT_API_KEY", "test-model-api-key")
+os.environ.setdefault("MODEL_AGENT_NAME", "test-model")
 
 agent_module = importlib.import_module("agents.self_host_sandbox_agent.agent")
 SandboxSessionManager = agent_module.SandboxSessionManager
@@ -46,7 +47,6 @@ class _FakeClient:
         self.remote_session_id = remote_session_id
         self.created_titles = []
         self.idle_count = 0
-        self.wakeup_count = 0
 
     def create_session(self, title: str):
         self.created_titles.append(title)
@@ -54,9 +54,6 @@ class _FakeClient:
 
     def post_status_idle(self):
         self.idle_count += 1
-
-    def post_turn_wakeup(self):
-        self.wakeup_count += 1
 
 
 def test_each_veadk_session_creates_a_distinct_remote_session(monkeypatch):
@@ -77,7 +74,9 @@ def test_each_veadk_session_creates_a_distinct_remote_session(monkeypatch):
     ]
 
 
-def test_remote_session_wakes_once_per_later_turn_and_idles_once(monkeypatch):
+def test_remote_session_writes_no_synthetic_event_and_idles_once_per_turn(
+    monkeypatch,
+):
     manager = SandboxSessionManager()
     client = _FakeClient("remote-1")
     monkeypatch.setattr(manager, "_new_client", lambda: client)
@@ -85,7 +84,6 @@ def test_remote_session_wakes_once_per_later_turn_and_idles_once(monkeypatch):
 
     manager.begin_turn("veadk-1")
     manager.begin_turn("veadk-1")
-    assert client.wakeup_count == 0
 
     manager.end_turn("veadk-1")
     assert client.idle_count == 0
@@ -94,7 +92,6 @@ def test_remote_session_wakes_once_per_later_turn_and_idles_once(monkeypatch):
 
     manager.begin_turn("veadk-1")
     manager.begin_turn("veadk-1")
-    assert client.wakeup_count == 1
     manager.end_turn("veadk-1")
     manager.end_turn("veadk-1")
     assert client.idle_count == 2

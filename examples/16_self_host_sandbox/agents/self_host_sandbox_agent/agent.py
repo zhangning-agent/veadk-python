@@ -43,7 +43,6 @@ class SandboxSessionManager:
     def __init__(self) -> None:
         self._clients: dict[str, SelfHostSandboxClient] = {}
         self._active_turns: dict[str, int] = {}
-        self._completed_turns: set[str] = set()
         self._lock = threading.Lock()
 
     def _new_client(self) -> SelfHostSandboxClient:
@@ -74,29 +73,14 @@ class SandboxSessionManager:
         return client.session_id or ""
 
     def begin_turn(self, veadk_session_id: str) -> None:
-        """Wake an idle remote Session once when a new local turn begins."""
+        """Track a local turn without writing a synthetic Session event."""
         key = veadk_session_id or "__default__"
         client = self.get(key)
         if not client.session_id:
             self.create_remote_session(key)
 
         with self._lock:
-            active_turns = self._active_turns.get(key, 0)
-            should_wake = active_turns == 0 and key in self._completed_turns
-            self._active_turns[key] = active_turns + 1
-
-        if not should_wake:
-            return
-        try:
-            client.post_turn_wakeup()
-        except Exception:
-            with self._lock:
-                remaining = self._active_turns.get(key, 1) - 1
-                if remaining > 0:
-                    self._active_turns[key] = remaining
-                else:
-                    self._active_turns.pop(key, None)
-            raise
+            self._active_turns[key] = self._active_turns.get(key, 0) + 1
 
     def end_turn(self, veadk_session_id: str) -> None:
         """Mark the remote Session idle after the last overlapping local turn."""
@@ -109,7 +93,6 @@ class SandboxSessionManager:
                 self._active_turns[key] = active_turns - 1
                 return
             self._active_turns.pop(key, None)
-            self._completed_turns.add(key)
             client = self._clients.get(key)
             if client:
                 client.post_status_idle()
@@ -119,7 +102,6 @@ class SandboxSessionManager:
         with self._lock:
             client = self._clients.pop(key, None)
             self._active_turns.pop(key, None)
-            self._completed_turns.discard(key)
         if client:
             client.post_status_idle()
 
@@ -129,7 +111,7 @@ sandbox_client = sandbox_sessions.get("__default__")
 
 
 def enable_sandbox_turn_lifecycle(runner: Any) -> Any:
-    """Wrap ``runner.run_async`` with one remote wake/idle pair per turn."""
+    """Wrap ``runner.run_async`` to mark the remote Session idle after a turn."""
     if getattr(runner, "_sandbox_turn_lifecycle_enabled", False):
         return runner
 

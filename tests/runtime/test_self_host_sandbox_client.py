@@ -126,30 +126,6 @@ def test_send_tool_result_uses_payload_shape(monkeypatch):
     ]
 
 
-def test_post_turn_wakeup_uses_user_message_event(monkeypatch):
-    client = _client()
-    posted_events = []
-    monkeypatch.setattr(
-        client,
-        "post_events",
-        lambda events: posted_events.extend(events) or {"status": "accepted"},
-    )
-
-    client.post_turn_wakeup()
-
-    assert posted_events == [
-        {
-            "type": "user.message",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "VeADK turn started; sandbox tool calls may follow.",
-                }
-            ],
-        }
-    ]
-
-
 def test_file_tools_are_converted_to_working_bash_commands(tmp_path):
     client = _client()
     target = tmp_path / "nested" / "example.txt"

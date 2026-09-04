@@ -124,9 +124,9 @@ VeADK 的 `user_id` 和 `session_id`，因此同一个飞书会话会复用上�
 Session。用户消息和模型循环留在 VeADK；`DispatchRuntimeProvider` 拦截模型生成的
 Tool call，以 `agent.tool_use` 发送给 Runtime，等待匹配的 Tool result 后交还给本地
 VeADK 模型继续生成最终回复。远端 Session 首次创建时会自动入队；后续每个 turn
-只在开始时发送一次 `user.message` 唤醒事件，使空闲的 sandbox 能够重新拉起，
-同一 turn 内的其他 Tool call 复用已有 Worker。每个 turn 结束时发送一次
-`session.status_idle`。
+以第一个真实的 `agent.tool_use` 事件让控制面重新入队并拉起空闲的 sandbox，
+同一 turn 内的其他 Tool call 复用已有 Worker。示例不会为了唤醒 sandbox 而伪造
+`user.message`；每个 turn 结束时发送一次 `session.status_idle`。
 
 ## Docker 与 Kubernetes 部署
 

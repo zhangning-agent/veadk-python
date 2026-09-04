@@ -18,7 +18,7 @@ Endpoints managed via Anthropic SDK:
 1. client.beta.sessions.create:
    Creates a session and enqueues work into the WorkQueue for the worker.
 2. client.beta.sessions.events.send:
-   Publishes turn wakeup, ``agent.tool_use``, and ``session.status_idle`` events.
+   Publishes ``agent.tool_use`` and ``session.status_idle`` events.
 3. client.beta.sessions.events.list:
    Retrieves session events to wait for ``user.tool_result`` from workers.
 """
@@ -148,22 +148,6 @@ class SelfHostSandboxClient:
         if hasattr(response, "model_dump"):
             return response.model_dump(warnings=False)
         return {"status": "ok"}
-
-    def post_turn_wakeup(self) -> Dict[str, Any]:
-        """Wake an existing idle Session before its next local VeADK turn."""
-        return self.post_events(
-            [
-                {
-                    "type": "user.message",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "VeADK turn started; sandbox tool calls may follow.",
-                        }
-                    ],
-                }
-            ]
-        )
 
     def send_tool_result(
         self, tool_use_id: str, content: str, is_error: bool = False
