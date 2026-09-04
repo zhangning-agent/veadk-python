@@ -15,6 +15,7 @@
 """VeADK agent whose tool calls run through a Self-Hosted Sandbox Runtime."""
 
 import asyncio
+import functools
 import logging
 import sys
 import threading
@@ -41,6 +42,8 @@ class SandboxSessionManager:
 
     def __init__(self) -> None:
         self._clients: dict[str, SelfHostSandboxClient] = {}
+        self._active_turns: dict[str, int] = {}
+        self._completed_turns: set[str] = set()
         self._lock = threading.Lock()
 
     def _new_client(self) -> SelfHostSandboxClient:
@@ -70,16 +73,86 @@ class SandboxSessionManager:
             )
         return client.session_id or ""
 
+    def begin_turn(self, veadk_session_id: str) -> None:
+        """Wake an idle remote Session once when a new local turn begins."""
+        key = veadk_session_id or "__default__"
+        client = self.get(key)
+        if not client.session_id:
+            self.create_remote_session(key)
+
+        with self._lock:
+            active_turns = self._active_turns.get(key, 0)
+            should_wake = active_turns == 0 and key in self._completed_turns
+            self._active_turns[key] = active_turns + 1
+
+        if not should_wake:
+            return
+        try:
+            client.post_turn_wakeup()
+        except Exception:
+            with self._lock:
+                remaining = self._active_turns.get(key, 1) - 1
+                if remaining > 0:
+                    self._active_turns[key] = remaining
+                else:
+                    self._active_turns.pop(key, None)
+            raise
+
+    def end_turn(self, veadk_session_id: str) -> None:
+        """Mark the remote Session idle after the last overlapping local turn."""
+        key = veadk_session_id or "__default__"
+        with self._lock:
+            active_turns = self._active_turns.get(key, 0)
+            if active_turns <= 0:
+                return
+            if active_turns > 1:
+                self._active_turns[key] = active_turns - 1
+                return
+            self._active_turns.pop(key, None)
+            self._completed_turns.add(key)
+            client = self._clients.get(key)
+            if client:
+                client.post_status_idle()
+
     def release(self, veadk_session_id: str) -> None:
         key = veadk_session_id or "__default__"
         with self._lock:
             client = self._clients.pop(key, None)
+            self._active_turns.pop(key, None)
+            self._completed_turns.discard(key)
         if client:
             client.post_status_idle()
 
 
 sandbox_sessions = SandboxSessionManager()
 sandbox_client = sandbox_sessions.get("__default__")
+
+
+def enable_sandbox_turn_lifecycle(runner: Any) -> Any:
+    """Wrap ``runner.run_async`` with one remote wake/idle pair per turn."""
+    if getattr(runner, "_sandbox_turn_lifecycle_enabled", False):
+        return runner
+
+    original_run_async = runner.run_async
+
+    @functools.wraps(original_run_async)
+    async def run_async_with_sandbox_turn(*args: Any, **kwargs: Any):
+        session_id = str(kwargs.get("session_id") or "")
+        if not session_id:
+            async for event in original_run_async(*args, **kwargs):
+                yield event
+            return
+
+        await asyncio.to_thread(sandbox_sessions.begin_turn, session_id)
+        try:
+            async for event in original_run_async(*args, **kwargs):
+                yield event
+        finally:
+            await asyncio.to_thread(sandbox_sessions.end_turn, session_id)
+
+    runner.run_async = run_async_with_sandbox_turn
+    runner._sandbox_turn_lifecycle_enabled = True
+    return runner
 
 
 def bash(command: str, timeout: float = 120) -> dict:

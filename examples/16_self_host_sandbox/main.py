@@ -19,7 +19,7 @@ import asyncio
 import signal
 import uuid
 
-from agents.self_host_sandbox_agent.agent import agent
+from agents.self_host_sandbox_agent.agent import agent, enable_sandbox_turn_lifecycle
 from veadk import Runner
 from veadk.extensions import FeishuChannelExtension
 
@@ -29,7 +29,7 @@ APP_NAME = "self_host_sandbox_demo"
 
 async def serve_feishu_channel(stop_event: asyncio.Event | None = None) -> None:
     """Serve Feishu conversations until the process receives a stop signal."""
-    runner = Runner(agent=agent, app_name=APP_NAME)
+    runner = enable_sandbox_turn_lifecycle(Runner(agent=agent, app_name=APP_NAME))
     channel = FeishuChannelExtension(
         runner=runner,
         streaming=True,
@@ -80,7 +80,7 @@ async def main() -> None:
         return
 
     session_id = args.session_id or f"veadk-{uuid.uuid4()}"
-    runner = Runner(agent=agent, app_name=APP_NAME)
+    runner = enable_sandbox_turn_lifecycle(Runner(agent=agent, app_name=APP_NAME))
     output = await runner.run(messages=args.prompt, session_id=session_id)
     print(output)
 

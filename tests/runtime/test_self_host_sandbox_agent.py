@@ -46,6 +46,7 @@ class _FakeClient:
         self.remote_session_id = remote_session_id
         self.created_titles = []
         self.idle_count = 0
+        self.wakeup_count = 0
 
     def create_session(self, title: str):
         self.created_titles.append(title)
@@ -53,6 +54,9 @@ class _FakeClient:
 
     def post_status_idle(self):
         self.idle_count += 1
+
+    def post_turn_wakeup(self):
+        self.wakeup_count += 1
 
 
 def test_each_veadk_session_creates_a_distinct_remote_session(monkeypatch):
@@ -71,6 +75,63 @@ def test_each_veadk_session_creates_a_distinct_remote_session(monkeypatch):
     assert manager.get("veadk-2").created_titles == [
         "VeADK Self-Hosted Sandbox Session veadk-2"
     ]
+
+
+def test_remote_session_wakes_once_per_later_turn_and_idles_once(monkeypatch):
+    manager = SandboxSessionManager()
+    client = _FakeClient("remote-1")
+    monkeypatch.setattr(manager, "_new_client", lambda: client)
+    manager.create_remote_session("veadk-1")
+
+    manager.begin_turn("veadk-1")
+    manager.begin_turn("veadk-1")
+    assert client.wakeup_count == 0
+
+    manager.end_turn("veadk-1")
+    assert client.idle_count == 0
+    manager.end_turn("veadk-1")
+    assert client.idle_count == 1
+
+    manager.begin_turn("veadk-1")
+    manager.begin_turn("veadk-1")
+    assert client.wakeup_count == 1
+    manager.end_turn("veadk-1")
+    manager.end_turn("veadk-1")
+    assert client.idle_count == 2
+
+
+def test_runner_wrapper_ends_remote_turn_after_failure(monkeypatch):
+    lifecycle_calls = []
+
+    class _FailingRunner:
+        async def run_async(self, **kwargs):
+            yield "started"
+            raise RuntimeError("turn failed")
+
+    monkeypatch.setattr(
+        agent_module.sandbox_sessions,
+        "begin_turn",
+        lambda session_id: lifecycle_calls.append(("begin", session_id)),
+    )
+    monkeypatch.setattr(
+        agent_module.sandbox_sessions,
+        "end_turn",
+        lambda session_id: lifecycle_calls.append(("end", session_id)),
+    )
+    runner = agent_module.enable_sandbox_turn_lifecycle(_FailingRunner())
+
+    async def consume():
+        async for _ in runner.run_async(session_id="veadk-1"):
+            pass
+
+    try:
+        asyncio.run(consume())
+    except RuntimeError as error:
+        assert str(error) == "turn failed"
+    else:
+        raise AssertionError("the wrapped runner must preserve turn failures")
+
+    assert lifecycle_calls == [("begin", "veadk-1"), ("end", "veadk-1")]
 
 
 def test_web_session_service_creation_provisions_remote_session(monkeypatch):
@@ -121,6 +182,10 @@ def test_feishu_channel_stays_up_until_stopped_and_shuts_down(monkeypatch):
     class _FakeRunner:
         def __init__(self, **kwargs):
             calls.append(("runner", kwargs))
+
+        async def run_async(self, **kwargs):
+            if False:
+                yield None
 
     class _FakeChannel:
         def __init__(self, *, runner, **kwargs):

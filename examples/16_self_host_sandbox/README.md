@@ -127,7 +127,10 @@ to keep each card bounded.
 for each newly created VeADK session. VeADK handles the user message and model
 loop locally. `DispatchRuntimeProvider` intercepts each model tool call, posts an
 `agent.tool_use`, waits for its matching tool result, and returns that result to
-the local VeADK model loop.
+the local VeADK model loop. Creating the remote Session enqueues its first turn.
+Later turns post one `user.message` wakeup before the local model loop so an idle
+sandbox can be started again; any additional tool calls in that turn reuse the
+same worker. Every turn finishes with one `session.status_idle` event.
 
 ## Docker and Kubernetes deployment
 
