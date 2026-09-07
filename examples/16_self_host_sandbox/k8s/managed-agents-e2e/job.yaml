@@ -1,0 +1,68 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: managed-agents-worker-e2e
+  namespace: managed-agents-demo
+spec:
+  completions: 3
+  parallelism: 3
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: managed-agents-worker
+        app.kubernetes.io/part-of: managed-agents-demo
+        managed-agents.execution-plane: kubernetes-e2e
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: cr-zn-datapath-cn-beijing
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: zn-datapath-cn-beijing.cr.volces.com/sandbox/veadk-managed-agents-worker:20260905-64fcd377-01
+          command: ["python", "/app/examples/16_self_host_sandbox/main.py"]
+          args: ["--managed-agent-worker", "--max-work-items", "1"]
+          envFrom:
+            - configMapRef:
+                name: managed-agents-config
+            - configMapRef:
+                name: managed-agents-worker-config
+            - secretRef:
+                name: managed-agents-task-auth
+            - secretRef:
+                name: managed-agents-model-auth
+          env:
+            - name: ANTHROPIC_BASE_URL
+              value: http://ma-server:8000
+            - name: DATABASE_POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: managed-agents-postgres-auth
+                  key: POSTGRES_PASSWORD
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workspace
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

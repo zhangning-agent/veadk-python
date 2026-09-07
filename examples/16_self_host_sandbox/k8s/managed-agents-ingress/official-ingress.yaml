@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: managed-agents-official
+  namespace: managed-agents-demo
+  annotations:
+    ingress.vke.volcengine.com/apig-instance-name: apig-instance-demo
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: apig
+  tls:
+    - hosts:
+        - sg5iamtstscbhqfpbjfd7.apigateway-cn-beijing.volceapi.com
+      secretName: managed-agents-official-tls
+  rules:
+    - host: sg5iamtstscbhqfpbjfd7.apigateway-cn-beijing.volceapi.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: managed-agents-gateway
+                port:
+                  number: 8080

@@ -914,6 +914,27 @@ Agent tree.
 - `ui/` holds the chat shell: sidebar, composer, message blocks, trace drawer.
 - `adk/identity.ts` resolves the user (SSO `userinfo` or local username).
 
+## Managed Agents standalone UI
+
+The repository also contains a small, independent Managed Agents control-plane
+UI. It creates an Agent and Session, sends user.message events, and consumes
+the Session SSE stream with polling fallback. It uses same-origin /v1 routes
+and never accepts service credentials in browser configuration.
+
+Run it against the local Managed Agents gateway:
+
+    cd frontend
+    MANAGED_AGENTS_API_TARGET=http://127.0.0.1:18080 npm run dev:managed-agents
+
+Build its static assets separately from the Studio package:
+
+    cd frontend
+    npm run build:managed-agents
+
+The generated files are written to frontend/dist/managed-agents/. Runtime
+configuration comes from managed-agents-config.json and is limited to the
+same-origin API path, polling interval, SSE feature switch, and page title.
+
 ## Agent-driven UI (A2UI)
 
 When an agent emits [A2UI](https://a2ui.org) (declarative UI), the client renders

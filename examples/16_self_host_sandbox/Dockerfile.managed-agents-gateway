@@ -1,0 +1,15 @@
+FROM node:22-alpine AS frontend-build
+
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend ./
+RUN npm run build:managed-agents
+
+FROM nginxinc/nginx-unprivileged:1.27-alpine
+
+COPY --from=frontend-build /src/frontend/dist/managed-agents/ /usr/share/nginx/html/
+COPY examples/16_self_host_sandbox/nginx.managed-agents.conf.template \
+    /etc/nginx/templates/default.conf.template
+
+EXPOSE 8080

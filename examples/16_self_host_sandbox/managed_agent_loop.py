@@ -22,10 +22,9 @@ import uuid
 from typing import Any
 
 from google.genai import types
+from sandbox_client import SelfHostSandboxClient
 
 from veadk.utils.adk_compat import get_event_function_calls
-
-from sandbox_client import SelfHostSandboxClient
 
 logger = logging.getLogger("veadk.managed_agent_loop")
 
@@ -49,16 +48,18 @@ class ManagedAgentsLoop:
         self,
         *,
         runner: Any,
-        session_client: SelfHostSandboxClient,
+        session_client: SelfHostSandboxClient | None = None,
+        session_id: str | None = None,
         user_id: str = "managed_agents_user",
     ) -> None:
-        if not session_client.session_id:
+        resolved_session_id = session_id or getattr(session_client, "session_id", None)
+        if not resolved_session_id:
             raise ValueError(
                 "ANTHROPIC_SESSION_ID (or SANDBOX_SESSION_ID) is required for Agent Loop mode."
             )
         self.runner = runner
         self.session_client = session_client
-        self.session_id = session_client.session_id
+        self.session_id = str(resolved_session_id)
         self.user_id = user_id
         self._completed_inputs: set[str] = set()
 
@@ -69,6 +70,10 @@ class ManagedAgentsLoop:
         stop_event: asyncio.Event | None = None,
     ) -> int:
         """Listen through SDK SSE, process pending user messages, and return turns run."""
+        if self.session_client is None:
+            raise ValueError(
+                "run() requires session_client; use run_pending() with a scoped SDK client"
+            )
         self._restore_completed_inputs(
             await asyncio.to_thread(self.session_client.list_events)
         )
@@ -126,18 +131,55 @@ class ManagedAgentsLoop:
                     backoff = min(backoff * 2, 5.0)
         return turns
 
-    def _restore_completed_inputs(self, events: list[dict[str, Any]]) -> None:
+    async def run_pending(self, sdk: Any, *, max_turns: int | None = 1) -> int:
+        """Process persisted, incomplete user messages for one claimed work item.
+
+        The Task Server work lease is the ownership boundary. Reading the
+        durable event ledger after the claim also makes this path safe when the
+        worker starts after the triggering SSE frame was originally emitted.
+        """
+        events = [
+            event
+            async for event in sdk.beta.sessions.events.list(
+                self.session_id, limit=1000, order="asc"
+            )
+        ]
+        self._restore_completed_inputs(events)
+        turns = 0
+        for event in events:
+            if self._value(event, "type") != "user.message":
+                continue
+            event_id = str(self._value(event, "id") or "")
+            if event_id and event_id in self._completed_inputs:
+                continue
+            await self._run_turn(sdk, event)
+            if event_id:
+                self._completed_inputs.add(event_id)
+            turns += 1
+            if max_turns is not None and turns >= max_turns:
+                break
+        return turns
+
+    def _restore_completed_inputs(self, events: list[Any]) -> None:
         """Mark inputs followed by a terminal event, leaving interrupted turns pending."""
         pending: list[str] = []
-        for event in sorted(events, key=self.session_client._event_seq):
-            event_type = str(event.get("type") or "")
+        for event in events:
+            event_type = str(self._value(event, "type") or "")
             if event_type == "user.message":
-                event_id = str(event.get("id") or "")
+                event_id = str(self._value(event, "id") or "")
                 if event_id:
                     pending.append(event_id)
             elif event_type in _TERMINAL_EVENT_TYPES:
-                self._completed_inputs.update(pending)
-                pending.clear()
+                if event_type == "session.status_idle":
+                    reason = self._value(event, "stop_reason")
+                    if self._value(reason, "type") not in {None, "end_turn"}:
+                        continue
+                # A terminal event closes one turn. More than one user message
+                # may have accumulated while no worker was running, so marking
+                # the entire pending list complete here would silently drop all
+                # but the first queued turn.
+                if pending:
+                    self._completed_inputs.add(pending.pop(0))
 
     async def _run_turn(self, sdk: Any, user_event: Any) -> None:
         span_id = ""
@@ -149,7 +191,7 @@ class ManagedAgentsLoop:
         }
 
         try:
-            prompt = self._message_text(getattr(user_event, "content", None))
+            prompt = self._message_text(self._value(user_event, "content"))
             await self._ensure_local_session()
             started = await sdk.beta.sessions.events.send(
                 self.session_id,
@@ -255,6 +297,12 @@ class ManagedAgentsLoop:
                 )
         if output_events:
             await sdk.beta.sessions.events.send(self.session_id, events=output_events)
+
+    @staticmethod
+    def _value(value: Any, name: str) -> Any:
+        return (
+            value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+        )
 
     @staticmethod
     def _message_text(content: Any) -> str:

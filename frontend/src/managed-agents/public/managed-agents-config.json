@@ -1,0 +1,7 @@
+{
+  "controlBasePath": "/api",
+  "taskBasePath": "/v1",
+  "pollingIntervalMs": 2000,
+  "sseEnabled": true,
+  "title": "托管智能体"
+}

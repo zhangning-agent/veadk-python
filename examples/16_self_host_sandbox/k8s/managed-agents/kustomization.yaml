@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: managed-agents-demo
+resources:
+  - namespace.yaml
+  # managed-agents-config is created from deployment-specific values.
+  # configmap.yaml is a safe example only.
+  - gateway-configmap.yaml
+  - postgres.yaml
+  - ma-server.yaml
+  - agent-loop-worker.yaml
+  - gateway.yaml
+  - network-policy.yaml
+  - pdb.yaml

@@ -1,0 +1,34 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  # Reuses the existing OMA APIG instance. The Ingress lives beside the
+  # replacement Service because Kubernetes Ingress backends cannot reference
+  # another namespace.
+  name: apig-ingress
+  namespace: managed-agents-demo
+  annotations:
+    ingress.vke.volcengine.com/apig-instance-name: apig-instance-demo
+spec:
+  ingressClassName: apig
+  rules:
+    # Keep the IP-derived host as a rollback/debug route while the generated
+    # APIG service domain is the official entrypoint.
+    - host: 101.126.74.249.nip.io
+      http:
+        paths:
+          - path: /.well-known/acme-challenge/
+            pathType: Prefix
+            backend:
+              service:
+                name: managed-agents-gateway
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: managed-agents-gateway
+                port:
+                  # The Volcengine APIG ingress controller requires a numeric
+                  # K8s service port when it creates the APIG upstream.
+                  number: 8080

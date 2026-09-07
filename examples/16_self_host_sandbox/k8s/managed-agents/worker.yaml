@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: managed-agents-worker
+spec:
+  # Base profile keeps the Kubernetes execution plane disabled. The
+  # k8s-worker overlay enables three replicas for a dedicated Environment.
+  replicas: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: managed-agents-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: managed-agents-worker
+        app.kubernetes.io/part-of: managed-agents-demo
+        managed-agents.execution-plane: kubernetes
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: cr-zn-datapath-cn-beijing
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: zn-datapath-cn-beijing.cr.volces.com/sandbox/veadk-managed-agents-worker:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: managed-agents-config
+            - configMapRef:
+                name: managed-agents-worker-config
+            - secretRef:
+                name: managed-agents-task-auth
+            - secretRef:
+                name: managed-agents-postgres-auth
+            - secretRef:
+                name: managed-agents-model-auth
+            - secretRef:
+                name: managed-agents-ma-auth
+          env:
+            - name: DATABASE_POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: managed-agents-postgres-auth
+                  key: POSTGRES_PASSWORD
+          readinessProbe:
+            exec:
+              command: ["test", "-s", "/tmp/managed-agent-worker-ready"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["test", "-s", "/tmp/managed-agent-worker-ready"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          startupProbe:
+            exec:
+              command: ["test", "-s", "/tmp/managed-agent-worker-ready"]
+            periodSeconds: 2
+            failureThreshold: 60
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workspace
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

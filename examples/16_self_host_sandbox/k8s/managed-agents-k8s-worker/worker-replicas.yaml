@@ -1,0 +1,7 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: managed-agents-worker
+  namespace: managed-agents-demo
+spec:
+  replicas: 3

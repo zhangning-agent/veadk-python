@@ -151,6 +151,67 @@ PYTHONPATH=/home/mofanke/github/agent-ma/anthropic-sdk-python/src:$PWD \
   examples/16_self_host_sandbox/local_agent_loop_test.py
 ```
 
+For a distributed local run, the worker uses the official Environment Work API
+as its ownership boundary. For local Environment IDs, ma-server implements that
+API while Session/Event data stays on the cloud Task Server. Every process has a
+unique worker ID; ma-server atomically polls and acknowledges one work item, while the SDK keeps its
+lease alive and cancels the handler if the lease is lost. Conversation state is
+kept in PostgreSQL, so a later turn can run in a different process.
+
+The local stack exposes only loopback ports:
+
+- `127.0.0.1:18080`: Nginx unified API. Agent routes and session creation go
+  through `ma-server`; session reads/events are proxied to Task Server. Environment
+  Work remains cluster-internal and is not exposed by this browser gateway.
+- `127.0.0.1:18081`: localhost-only ma-server official Environment Work endpoint
+  used by the three Agent Loop processes.
+- `127.0.0.1:55432`: PostgreSQL used by VeADK's `DatabaseSessionService`.
+
+`ma-server` stores Agent definitions locally and converts an Agent ID into an
+immutable `agent_with_overrides` snapshot when it creates the Task Server
+session. Configure the existing `.env`, then run:
+
+```bash
+# Required once after editing the local Anthropic SDK checkout.
+uv pip install --python .venv/bin/python -e \
+  /home/mofanke/github/agent-ma/anthropic-sdk-python
+
+# Start PostgreSQL, ma-server, and Nginx. ma-server Work stays on 127.0.0.1:18081.
+bash examples/16_self_host_sandbox/local_managed_agents_stack.sh up
+
+# Start three equal workers, create an Agent/Session with the first message,
+# run three turns, and verify PostgreSQL recovery in a different worker each time.
+bash examples/16_self_host_sandbox/local_managed_agents_stack.sh test
+
+# Stop containers; named volumes are intentionally retained.
+bash examples/16_self_host_sandbox/local_managed_agents_stack.sh down
+```
+
+The test creates an isolated random environment queue, starts three workers
+before the Session exists, requires each to complete one successful empty queue
+poll, and gives each worker `--max-work-items 1`. Session creation includes the
+first `user.message`; three turns therefore produce three distinct work IDs and
+are naturally claimed by three different workers without the test choosing or
+killing a winner. The third worker must recall codewords introduced in both
+earlier processes from PostgreSQL. A successful run ends with
+`Distributed stateless VeADK Agent Loop test passed.`
+The distributed worker rebuilds its capabilities from the frozen `Session.agent`
+snapshot. It executes `bash`, `read`, `write`, `edit`, `glob`, and `grep` in the
+session-specific work directory, supports local `web_fetch`/`web_search`, restores
+URL MCP servers as ADK `McpToolset` instances, and records matching Managed Agents
+tool events. Custom tools and `always_ask` pause through `requires_action` until a
+matching user result or confirmation arrives. Session-pinned Skills are downloaded
+from ma-server into `<MANAGED_AGENT_WORKDIR>/sessions/<session-id>/skills/` after
+the lease heartbeat starts and before VeADK restores the PostgreSQL conversation.
+For local runs this process is the host, so use an isolated directory; in
+production, run it inside the intended sandbox.
+
+If SDK tests fail before making a request because the host configures a SOCKS
+proxy but `socksio` is absent, either install the SDK's SOCKS extra or unset the
+proxy variables for credential-free mock tests. Generated API tests also require
+the repository's mock server and optional `aiohttp` test dependency; the focused
+Agent Loop tests do not.
+
 
 `ShortTermMemory.after_create_session_callback` creates one remote Managed Session
 for each newly created VeADK session. VeADK handles the user message and model

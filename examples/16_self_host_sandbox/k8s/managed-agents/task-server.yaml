@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: task-server
+spec:
+  selector:
+    app.kubernetes.io/name: managed-agents-task-server
+  ports:
+    - name: http
+      port: 8787
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: managed-agents-task-server
+spec:
+  # The current work queue is process-local. Keep one replica until queue
+  # claiming is moved into PostgreSQL. Session/events are PostgreSQL-backed.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: managed-agents-task-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: managed-agents-task-server
+        app.kubernetes.io/part-of: managed-agents-demo
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: cr-zn-datapath-cn-beijing
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: task-server
+          image: zn-datapath-cn-beijing.cr.volces.com/sandbox/oma-task-server:dev
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8787
+          env:
+            - name: AUTH_DISABLED
+              value: "1"
+            - name: ANTHROPIC_ENVIRONMENT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: managed-agents-task-auth
+                  key: ANTHROPIC_ENVIRONMENT_KEY
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: managed-agents-postgres-auth
+                  key: OMA_DATABASE_URL
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 90
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

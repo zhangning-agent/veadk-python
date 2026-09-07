@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: managed-agents-test-mcp
+  namespace: managed-agents-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: managed-agents-test-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: managed-agents-test-mcp
+        app.kubernetes.io/part-of: managed-agents-demo
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: cr-zn-datapath-cn-beijing
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp
+          image: zn-datapath-cn-beijing.cr.volces.com/sandbox/veadk-managed-agents-worker:20260906-scoped-skills-02
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-c"]
+          args:
+            - |
+              from fastmcp import FastMCP
+              mcp = FastMCP("managed-agents-e2e")
+              @mcp.tool
+              def add_numbers(a: int, b: int) -> int:
+                  return a + b
+              mcp.run(transport="http", host="0.0.0.0", port=9000, path="/mcp", show_banner=False)
+          ports:
+            - name: http
+              containerPort: 9000
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 2
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: managed-agents-test-mcp
+  namespace: managed-agents-demo
+spec:
+  selector:
+    app.kubernetes.io/name: managed-agents-test-mcp
+  ports:
+    - name: http
+      port: 9000
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agent-loop-to-test-mcp
+  namespace: managed-agents-demo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: managed-agents-test-mcp
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: managed-agents-agent-loop
+      ports:
+        - protocol: TCP
+          port: 9000

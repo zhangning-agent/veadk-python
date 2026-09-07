@@ -1,0 +1,34 @@
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    PATH=/app/.venv/bin:$PATH \
+    PYTHONPATH=/app:/app/examples/16_self_host_sandbox \
+    HOME=/tmp/home \
+    MANAGED_AGENT_WORKDIR=/workspace \
+    MANAGED_AGENT_READY_FILE=/tmp/managed-agent-worker-ready
+
+WORKDIR /app
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
+COPY pyproject.toml uv.lock README.md LICENSE ./
+COPY veadk ./veadk
+RUN uv sync --frozen --no-dev --extra sandbox
+
+# The work dispatcher and Agent Loop event types are currently implemented in
+# the adjacent Anthropic SDK checkout.  The build command creates this wheel
+# in .docker-dist so the deployed image never depends on a host editable path.
+COPY examples/16_self_host_sandbox/.docker-dist/anthropic-*.whl /tmp/anthropic/
+RUN uv pip install --python /app/.venv/bin/python --reinstall --no-deps /tmp/anthropic/*.whl \
+    && rm -rf /tmp/anthropic
+
+COPY examples/16_self_host_sandbox ./examples/16_self_host_sandbox
+RUN useradd --create-home --uid 10001 veadk \
+    && mkdir -p /workspace /tmp/home \
+    && chown -R veadk:veadk /workspace /tmp/home
+
+USER 10001:10001
+
+CMD ["python", "/app/examples/16_self_host_sandbox/main.py", "--managed-agent-worker"]

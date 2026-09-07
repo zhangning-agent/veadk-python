@@ -18,7 +18,6 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-
 EXAMPLE_DIR = Path(__file__).parents[2] / "examples" / "16_self_host_sandbox"
 if str(EXAMPLE_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLE_DIR))
@@ -86,6 +85,18 @@ class _SessionClient:
     @staticmethod
     def _event_seq(event):
         return int(event.get("_seq", 0))
+
+
+class _AsyncPage:
+    def __init__(self, events):
+        self.events = events
+
+    def __aiter__(self):
+        async def iterate():
+            for event in self.events:
+                yield event
+
+        return iterate()
 
 
 def _event(*parts, usage=None, partial=False, function_calls=None):
@@ -227,3 +238,71 @@ def test_recovery_only_marks_user_messages_followed_by_terminal_event_complete()
     )
 
     assert loop._completed_inputs == {"old"}
+
+
+def test_recovery_pairs_one_terminal_with_one_queued_user_message():
+    loop = ManagedAgentsLoop(runner=_Runner([]), session_client=_SessionClient())
+
+    loop._restore_completed_inputs(
+        [
+            {"id": "first", "type": "user.message"},
+            {"id": "second", "type": "user.message"},
+            {"id": "running", "type": "session.status_running"},
+            {"id": "idle", "type": "session.status_idle"},
+        ]
+    )
+
+    assert loop._completed_inputs == {"first"}
+
+
+def test_requires_action_does_not_mark_turn_complete_during_recovery():
+    loop = ManagedAgentsLoop(runner=_Runner([]), session_client=_SessionClient())
+
+    loop._restore_completed_inputs(
+        [
+            {"id": "pending", "type": "user.message"},
+            {
+                "id": "waiting",
+                "type": "session.status_idle",
+                "stop_reason": {"type": "requires_action"},
+            },
+        ]
+    )
+
+    assert loop._completed_inputs == set()
+
+
+def test_claimed_work_processes_only_pending_message_from_durable_log():
+    runner = _Runner([])
+    sdk = _SDK()
+    sdk.beta.sessions.events.list = lambda *args, **kwargs: _AsyncPage(
+        [
+            {
+                "id": "old",
+                "type": "user.message",
+                "content": [{"type": "text", "text": "old"}],
+            },
+            {"id": "idle", "type": "session.status_idle"},
+            {
+                "id": "pending",
+                "type": "user.message",
+                "content": [{"type": "text", "text": "new"}],
+            },
+        ]
+    )
+    loop = ManagedAgentsLoop(runner=runner, session_id="managed-session-1")
+
+    turns = asyncio.run(loop.run_pending(sdk))
+
+    assert turns == 1
+    assert len(runner.calls) == 1
+    assert runner.calls[0]["new_message"].parts[0].text == "new"
+    emitted = [
+        event for _, batch in sdk.beta.sessions.events.batches for event in batch
+    ]
+    assert [event["type"] for event in emitted] == [
+        "session.status_running",
+        "span.model_request_start",
+        "span.model_request_end",
+        "session.status_idle",
+    ]

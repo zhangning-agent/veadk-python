@@ -148,6 +148,58 @@ PYTHONPATH=/home/mofanke/github/agent-ma/anthropic-sdk-python/src:$PWD \
   examples/16_self_host_sandbox/local_agent_loop_test.py
 ```
 
+分布式本地模式使用官方 Environment Work API 作为唯一执行权边界。本地 Environment
+ID 的 Work API 由 ma-server 实现，Session/Event 仍保存在云 Task Server。每个进程
+使用不同的 worker ID；ma-server 原子完成 poll/ack，SDK 在处理期间维护
+租约，并在租约丢失时取消 handler。VeADK 对话状态写入 PostgreSQL，因此后续轮次
+可以由另一个进程恢复并继续。
+
+本地栈只监听 loopback：
+
+- `127.0.0.1:18080`：Nginx 统一入口。Agent 路由及 session 创建经过
+  `ma-server`；session 查询/事件由它代理至 Task Server。Environment Work 仅供
+  集群内 Worker 使用，不通过浏览器 Gateway 暴露。
+- `127.0.0.1:18081`：仅监听 localhost 的 ma-server 官方 Environment Work 入口，
+  供三个 Agent Loop 进程使用。
+- `127.0.0.1:55432`：VeADK `DatabaseSessionService` 使用的 PostgreSQL。
+
+`ma-server` 在本地保存 Agent 定义，并在创建 Task Server session 时将 Agent ID
+转换为不可变的 `agent_with_overrides` 快照。配置现有 `.env` 后执行：
+
+```bash
+# 修改本地 Anthropic SDK 后首次执行。
+uv pip install --python .venv/bin/python -e \
+  /home/mofanke/github/agent-ma/anthropic-sdk-python
+
+# 启动 PostgreSQL、ma-server 和 Nginx；Worker API 仅监听 127.0.0.1:18081。
+bash examples/16_self_host_sandbox/local_managed_agents_stack.sh up
+
+# 先启动三个平等 Worker，再创建 Agent/Session，执行三轮并验证跨进程恢复。
+bash examples/16_self_host_sandbox/local_managed_agents_stack.sh test
+
+# 停止容器；用于持久化的 named volume 会保留。
+bash examples/16_self_host_sandbox/local_managed_agents_stack.sh down
+```
+
+测试使用随机隔离的 environment queue，并在 Session 存在之前先启动三个 Worker；
+每个 Worker 先完成一次真实的空队列 poll，并带 `--max-work-items 1`。创建 Session
+时直接携带第一条 `user.message`，三轮对话因此自然产生三个不同 work，并由三个
+平等竞争的 Worker 各领取一次，测试不会指定或主动杀死获胜者。第三个 Worker
+必须从 PostgreSQL 恢复前两个进程分别写入的 codeword。成功输出以
+`Distributed stateless VeADK Agent Loop test passed.` 结束。
+分布式 Worker 会从冻结的 `Session.agent` 快照重建能力。`bash`、`read`、
+`write`、`edit`、`glob` 和 `grep` 在 Session 独立工作目录执行；
+`web_fetch`/`web_search` 走本地 VeADK 实现；URL MCP Server 转换为 ADK
+`McpToolset` 并记录对应 Managed Agents 工具事件。自定义工具和 `always_ask`
+会进入 `requires_action`，等待匹配的用户结果或确认后继续。Worker 在心跳启动后、
+从 PostgreSQL 恢复对话前，根据 Session 固定版本从 ma-server 下载 Skills 到
+`<MANAGED_AGENT_WORKDIR>/sessions/<session-id>/skills/`。本地运行时该进程就在
+宿主机上，因此应使用隔离目录；生产环境应将 Worker 部署在目标沙箱内。
+
+如果 SDK 测试在发请求前因宿主机启用了 SOCKS 代理、但未安装 `socksio` 而失败，
+可以安装 SDK 的 SOCKS extra，或在无凭据 mock 测试中清除代理变量。生成的 API
+测试还依赖仓库 mock server 和可选 `aiohttp` 测试依赖；聚焦 Agent Loop 测试不依赖它们。
+
 
 每个新建的 VeADK Session 都通过 `POST /v1/sessions` 创建一个远端 Managed
 Session。用户消息和模型循环留在 VeADK；`DispatchRuntimeProvider` 拦截模型生成的

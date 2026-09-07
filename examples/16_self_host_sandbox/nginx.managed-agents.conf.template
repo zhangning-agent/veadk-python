@@ -1,0 +1,95 @@
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location = /managed-agents-config.json {
+        default_type application/json;
+        add_header Cache-Control "no-store";
+        return 200 '{"controlBasePath":"/api","taskBasePath":"/v1","sseEnabled":true,"pollingIntervalMs":1500,"title":"Managed Agents"}';
+    }
+
+    # Agents, local Environments and the local Session index belong to
+    # ma-server. POST /api/sessions resolves the local Agent snapshot before
+    # ma-server creates the durable Session on the cloud Task Server.
+    location ~ ^/api/(?:agents|environments|environment-provisionings|sessions)(?:/|$) {
+        proxy_pass http://ma-server:8000;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 6m;
+        proxy_read_timeout 6m;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization "Bearer ${MA_SERVER_API_TOKEN}";
+        proxy_set_header Accept-Encoding "";
+    }
+
+    # Skills are managed locally by ma-server and backed by AgentKit. This is
+    # intentionally more specific than the generic /v1 deny below.
+    location ~ ^/v1/skills(?:/|$) {
+        client_max_body_size 20m;
+        proxy_pass http://ma-server:8000;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 6m;
+        proxy_read_timeout 6m;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization "Bearer ${MA_SERVER_API_TOKEN}";
+        proxy_set_header Accept-Encoding "";
+    }
+
+    # Official Environment Work routes are cluster-internal only. Agent Loop
+    # workers use the official SDK directly against ma-server.
+    location = /v1/environments { return 404; }
+    location ~ ^/v1/environments/[^/]+/work(?:/|$) {
+        return 404;
+    }
+
+    # SSE is read-only, so it can stream directly from Task Server without
+    # bypassing the local enqueue hook.
+    location ~ ^/v1/sessions/[^/]+/events/stream$ {
+        proxy_pass ${TASK_SERVER_BASE_URL};
+        proxy_http_version 1.1;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $proxy_host;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header Authorization "Bearer ${ANTHROPIC_ENVIRONMENT_KEY}";
+        proxy_set_header X-Top-Account-Id "${X_TOP_ACCOUNT_ID}";
+        proxy_set_header anthropic-beta "managed-agents-2026-04-01";
+        proxy_set_header Accept-Encoding "";
+        add_header X-Accel-Buffering no always;
+    }
+
+    # ma-server proxies the cloud Task Server and also enqueues one local Agent
+    # Loop work item for every user.message. It remains the sole source of truth
+    # for the local work ledger; Session/event bytes remain on Task Server.
+    location ~ ^/v1/sessions/[^/]+(?:/events(?:/stream)?|)$ {
+        proxy_pass http://ma-server:8000;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization "Bearer ${MA_SERVER_API_TOKEN}";
+        proxy_set_header Accept-Encoding "";
+        add_header X-Accel-Buffering no always;
+    }
+
+    location /v1/ {
+        return 404;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

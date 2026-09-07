@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+**/.env
+**/.env.*
+!**/.env.example
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/node_modules
+docs
+tests
+veadk
+examples/16_self_host_sandbox/.local-managed-agents

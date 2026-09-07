@@ -52,6 +52,7 @@ class SelfHostSandboxClient:
         account_id: Optional[str] = None,
         remote_bash_tool_name: Optional[str] = None,
         timeout: int = 120,
+        trust_env: Optional[bool] = None,
     ):
         self.base_url = (
             base_url
@@ -87,6 +88,7 @@ class SelfHostSandboxClient:
             "SANDBOX_BASH_TOOL_NAME", "bash"
         )
         self.timeout = int(os.getenv("SANDBOX_TIMEOUT_SECONDS", str(timeout)))
+        self.trust_env = trust_env
 
         if not self.base_url:
             raise ValueError(
@@ -106,20 +108,32 @@ class SelfHostSandboxClient:
             default_headers["X-Top-Account-Id"] = str(self.account_id)
 
         self._default_headers = default_headers
+        http_client = (
+            anthropic.DefaultHttpxClient(trust_env=trust_env)
+            if trust_env is not None
+            else None
+        )
         self.client = anthropic.Anthropic(
             base_url=self.base_url,
             auth_token=self.bearer_token,
             default_headers=default_headers,
             timeout=float(self.timeout),
+            http_client=http_client,
         )
 
     def create_async_client(self) -> anthropic.AsyncAnthropic:
         """Create an async SDK client for the Agent Loop event stream."""
+        http_client = (
+            anthropic.DefaultAsyncHttpxClient(trust_env=self.trust_env)
+            if self.trust_env is not None
+            else None
+        )
         return anthropic.AsyncAnthropic(
             base_url=self.base_url,
             auth_token=self.bearer_token,
             default_headers=self._default_headers,
             timeout=float(self.timeout),
+            http_client=http_client,
         )
 
     def create_session(
@@ -252,32 +266,65 @@ class SelfHostSandboxClient:
         self, tool_name: str, arguments: Dict[str, Any]
     ) -> tuple[str, float]:
         """Translate supported non-MCP tools into one remote bash invocation."""
-        timeout = self._positive_timeout(arguments.get("timeout", self.timeout))
+        return self.tool_to_bash(
+            tool_name, arguments, default_timeout=float(self.timeout)
+        )
+
+    @classmethod
+    def tool_to_bash(
+        cls,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        default_timeout: float = 120,
+    ) -> tuple[str, float]:
+        """Translate a supported tool call into a shell command."""
+        timeout_value = arguments.get("timeout")
+        if timeout_value is None and arguments.get("timeout_ms") is not None:
+            timeout_value = cls._positive_timeout(arguments["timeout_ms"]) / 1000
+        timeout = cls._positive_timeout(
+            default_timeout if timeout_value is None else timeout_value
+        )
         if tool_name == "bash":
-            cmd = self._required_string(arguments, "command", tool_name)
+            if arguments.get("restart"):
+                return "printf 'bash session restarted'", timeout
+            cmd = cls._required_string(arguments, "command", tool_name)
             return html.unescape(cmd), timeout
 
-        if tool_name == "read_file":
-            file_path = self._required_string(arguments, "file_path", tool_name)
+        if tool_name in {"read", "read_file"}:
+            file_path = cls._required_string(arguments, "file_path", tool_name)
             offset = arguments.get("offset")
             limit = arguments.get("limit")
+            if tool_name == "read" and arguments.get("view_range") is not None:
+                view_range = arguments["view_range"]
+                if (
+                    not isinstance(view_range, list)
+                    or len(view_range) != 2
+                    or any(
+                        isinstance(value, bool) or not isinstance(value, int)
+                        for value in view_range
+                    )
+                    or view_range[0] < 1
+                    or (view_range[1] > 0 and view_range[1] < view_range[0])
+                ):
+                    raise ValueError("view_range must be [start_line, end_line]")
+                offset = view_range[0]
+                limit = view_range[1] - view_range[0] + 1 if view_range[1] > 0 else None
             quoted_path = shlex.quote(file_path)
             if offset is None and limit is None:
                 return f"cat -- {quoted_path}", timeout
-            start = self._positive_integer(
-                offset if offset is not None else 1, "offset"
-            )
+            start = cls._positive_integer(offset if offset is not None else 1, "offset")
             if limit is None:
                 condition = f"NR >= {start}"
             else:
-                line_limit = self._positive_integer(limit, "limit")
+                line_limit = cls._positive_integer(limit, "limit")
                 condition = f"NR >= {start} && NR < {start + line_limit}"
             awk_program = f'{condition} {{printf "%d\\t%s\\n", NR, $0}}'
             return f"awk {shlex.quote(awk_program)} {quoted_path}", timeout
 
-        if tool_name == "write_file":
-            file_path = self._required_string(arguments, "file_path", tool_name)
-            content = self._required_string(
+        if tool_name in {"write", "write_file"}:
+            file_path = cls._required_string(arguments, "file_path", tool_name)
+            content = cls._required_string(
                 arguments, "content", tool_name, allow_empty=True
             )
             encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
@@ -288,11 +335,11 @@ class SelfHostSandboxClient:
             )
             return command, timeout
 
-        if tool_name == "edit_file":
+        if tool_name in {"edit", "edit_file"}:
             payload = {
-                "file_path": self._required_string(arguments, "file_path", tool_name),
-                "old_string": self._required_string(arguments, "old_string", tool_name),
-                "new_string": self._required_string(
+                "file_path": cls._required_string(arguments, "file_path", tool_name),
+                "old_string": cls._required_string(arguments, "old_string", tool_name),
+                "new_string": cls._required_string(
                     arguments, "new_string", tool_name, allow_empty=True
                 ),
                 "replace_all": bool(arguments.get("replace_all", False)),
@@ -315,20 +362,42 @@ class SelfHostSandboxClient:
                 timeout,
             )
 
+        if tool_name == "glob":
+            pattern = cls._required_string(arguments, "pattern", tool_name)
+            path = str(arguments.get("path") or ".")
+            payload = base64.b64encode(
+                json.dumps({"pattern": pattern, "path": path}).encode()
+            ).decode("ascii")
+            script = (
+                "import base64,json,pathlib,sys;"
+                "d=json.loads(base64.b64decode(sys.argv[1]));"
+                "p=pathlib.Path(d['path']).resolve();"
+                "xs=(x for x in p.glob(d['pattern']) if x.resolve().is_relative_to(p));"
+                "xs=sorted(xs,key=lambda x:x.stat().st_mtime,"
+                "reverse=True)[:200];"
+                "print('\\n'.join(map(str,xs)) if xs else 'no matches')"
+            )
+            return (
+                f"python3 -c {shlex.quote(script)} {shlex.quote(payload)}",
+                timeout,
+            )
+
         if tool_name == "list_files":
             path = str(arguments.get("path") or "/workspace")
-            depth = self._positive_integer(arguments.get("max_depth", 4), "max_depth")
+            depth = cls._positive_integer(arguments.get("max_depth", 4), "max_depth")
             return (
                 f"find {shlex.quote(path)} -maxdepth {depth} -type f | sort | head -n 500",
                 timeout,
             )
 
-        if tool_name == "search_files":
-            pattern = self._required_string(arguments, "pattern", tool_name)
-            path = str(arguments.get("path") or "/workspace")
+        if tool_name in {"grep", "search_files"}:
+            pattern = cls._required_string(arguments, "pattern", tool_name)
+            path = str(
+                arguments.get("path") or ("." if tool_name == "grep" else "/workspace")
+            )
             glob = arguments.get("glob")
             rg_flags = "-n --no-heading"
-            grep_flags = "-RIn"
+            grep_flags = "-rIn"
             if arguments.get("case_insensitive"):
                 rg_flags += " -i"
                 grep_flags += " -i"
@@ -346,7 +415,7 @@ class SelfHostSandboxClient:
             )
 
         if tool_name == "python":
-            code = self._required_string(arguments, "code", tool_name, allow_empty=True)
+            code = cls._required_string(arguments, "code", tool_name, allow_empty=True)
             workdir = str(arguments.get("workdir") or "/workspace")
             return (
                 f"cd {shlex.quote(workdir)} && python3 -c {shlex.quote(code)}",

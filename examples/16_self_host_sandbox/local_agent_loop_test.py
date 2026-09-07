@@ -160,6 +160,7 @@ def main() -> None:
         agent_id="agent_local",
         session_id=SESSION_ID,
         bearer_token="local-test-token",
+        trust_env=False,
     )
 
     loop = ManagedAgentsLoop(runner=LocalRunner(), session_client=client)

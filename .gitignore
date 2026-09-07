@@ -208,6 +208,7 @@ cython_debug/
 .agents
 .adk/
 **/.adk/
+examples/16_self_host_sandbox/.local-managed-agents/
 # AgentKit deploy config (contains account-specific secrets)
 agentkit.yaml
 agentkit*.yaml
@@ -215,3 +216,8 @@ agentkit*.yaml
 
 # PiAgent release archives are downloaded and verified during image builds.
 examples/piagent_with_mcp/vendor/pi-*.tar.gz
+# Local wheel staged only as a Docker build input.
+examples/16_self_host_sandbox/.docker-dist/
+
+# Playwright MCP generated logs
+.playwright-mcp/
