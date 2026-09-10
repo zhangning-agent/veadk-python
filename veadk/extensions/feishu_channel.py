@@ -16,6 +16,8 @@ import asyncio
 import inspect
 import json
 import os
+import threading
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -53,6 +55,9 @@ _patch_markdown_stream_merge()
 MessageHandler = Callable[["FeishuMessageContext"], Awaitable[str | None] | str | None]
 SessionIdFactory = Callable[[Any], str]
 UserIdFactory = Callable[[Any], str]
+SessionResetCallback = Callable[[str, str], Any]
+
+SESSION_RESET_COMMANDS = frozenset({"/new", "/reset", "/clear"})
 
 _SENSITIVE_FIELD_MARKERS = (
     "api_key",
@@ -380,7 +385,7 @@ class FeishuChannelExtension:
         channel_kwargs: dict[str, Any] | None = None,
         streaming: bool = False,
         reactions: bool = False,
-        show_thinking: bool = False,
+        show_thinking: bool | None = None,
         show_tool_calls: bool = False,
         show_tool_results: bool = False,
         separate_tool_call_cards: bool = False,
@@ -390,6 +395,8 @@ class FeishuChannelExtension:
         include_parent_message: bool = True,
         include_thread_history: bool = True,
         thread_history_limit: int = 20,
+        enable_session_commands: bool = True,
+        on_new_session: SessionResetCallback | None = None,
     ) -> None:
         self.runner = runner
         self.session_id_factory = session_id_factory or self.default_session_id_factory
@@ -398,6 +405,11 @@ class FeishuChannelExtension:
         self.response_formatter = response_formatter or self.default_response_formatter
         self.reply_in_thread = reply_in_thread
         self.ignore_empty_messages = ignore_empty_messages
+        self.enable_session_commands = enable_session_commands
+        self.on_new_session = on_new_session
+        self._active_sessions: dict[str, str] = {}
+        self._reset_boundaries: dict[str, int | None] = {}
+        self._sessions_lock = threading.Lock()
         self.reactions = (
             reactions
             or str(os.getenv("TOOL_FEISHU_CHANNEL_REACTIONS", "")).lower() == "true"
@@ -406,8 +418,10 @@ class FeishuChannelExtension:
             streaming
             or str(os.getenv("TOOL_FEISHU_CHANNEL_STREAMING", "")).lower() == "true"
         )
-        self.show_thinking = show_thinking or _env_enabled(
-            "TOOL_FEISHU_CHANNEL_SHOW_THINKING"
+        self.show_thinking = (
+            show_thinking
+            if show_thinking is not None
+            else _env_enabled("TOOL_FEISHU_CHANNEL_SHOW_THINKING")
         )
         self.show_tool_calls = show_tool_calls or _env_enabled(
             "TOOL_FEISHU_CHANNEL_SHOW_TOOL_CALLS"
@@ -470,6 +484,27 @@ class FeishuChannelExtension:
             )
 
         self.channel.on("message", self._on_message)
+
+    def reset_session(
+        self, scope_key: str, *, create_time: int | None = None
+    ) -> tuple[str, str]:
+        """Generate a new session_id for scope_key and return (old_id, new_id)."""
+        nonce = uuid.uuid4().hex[:8]
+        new_id = f"{scope_key}_{nonce}"
+        with self._sessions_lock:
+            old_id = self._active_sessions.get(scope_key, scope_key)
+            self._active_sessions[scope_key] = new_id
+            # Unknown boundaries must not allow old external history back in.
+            self._reset_boundaries[scope_key] = create_time
+        return old_id, new_id
+
+    def get_active_session_id(self, message: Any) -> str:
+        """Resolve the effective session_id for a message, honoring active resets."""
+        base_id = self.session_id_factory(message)
+        if not self.enable_session_commands:
+            return base_id
+        with self._sessions_lock:
+            return self._active_sessions.get(base_id, base_id)
 
     @staticmethod
     def default_user_id_factory(message: Any) -> str:
@@ -686,6 +721,47 @@ class FeishuChannelExtension:
             )
             return
         logger.debug(f"Received Feishu message: {getattr(message, 'message_id', '')}")
+
+        if self.enable_session_commands and text:
+            first_token = text.split()[0].lower()
+            if first_token in SESSION_RESET_COMMANDS:
+                base_scope = self.session_id_factory(message)
+                old_id, new_id = self.reset_session(
+                    base_scope, create_time=self._message_create_time(message)
+                )
+                logger.info(
+                    "Feishu session reset for scope=%s: old=%s new=%s",
+                    base_scope,
+                    old_id,
+                    new_id,
+                )
+                if self.on_new_session is not None:
+                    try:
+                        res = self.on_new_session(old_id, new_id)
+                        if inspect.isawaitable(res):
+                            await res
+                    except Exception as exc:
+                        logger.error("Error in on_new_session callback: %s", exc)
+
+                remainder = text[len(first_token) :].strip()
+                if not remainder:
+                    context = self.build_message_context(message=message, text=text)
+                    send_options = {}
+                    if self.reply_in_thread and context.message_id:
+                        send_options["reply_to"] = context.message_id
+                        if self.create_topic or context.thread_id:
+                            send_options["reply_in_thread"] = True
+                    await self._maybe_await(
+                        self.channel.send(
+                            context.chat_id,
+                            self.response_formatter(
+                                "✨ 已为您开启全新会话，后续对话将使用独立的上下文与环境。"
+                            ),
+                            send_options,
+                        )
+                    )
+                    return
+                text = remainder
 
         prefix = await self._collect_reference_context(message)
         composed_text = f"{prefix}\n\n{text}".strip() if prefix else text
@@ -1095,7 +1171,7 @@ class FeishuChannelExtension:
         self, message: Any, text: str | None = None
     ) -> FeishuMessageContext:
         user_id = self.user_id_factory(message)
-        session_id = self.session_id_factory(message)
+        session_id = self.get_active_session_id(message)
         message_id = _coalesce(
             getattr(message, "message_id", None),
             getattr(message, "id", None),
@@ -1221,6 +1297,16 @@ class FeishuChannelExtension:
             return None
         return self._openapi_client
 
+    @staticmethod
+    def _message_create_time(message: Any) -> int | None:
+        """Read Feishu's millisecond creation timestamp (SDK int or API string)."""
+        value = getattr(message, "create_time", None)
+        try:
+            timestamp = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return timestamp if timestamp > 0 else None
+
     async def _collect_reference_context(self, message: Any) -> str:
         if not (self.include_parent_message or self.include_thread_history):
             return ""
@@ -1240,21 +1326,49 @@ class FeishuChannelExtension:
         root_id = getattr(message, "root_id", None) or thread_id
         message_id = getattr(message, "message_id", "")
 
+        scope_key = self.session_id_factory(message)
+        with self._sessions_lock:
+            has_reset = (
+                self.enable_session_commands and scope_key in self._reset_boundaries
+            )
+            boundary = self._reset_boundaries.get(scope_key)
+
+        def after_reset(candidate: Any) -> bool:
+            if not has_reset:
+                return True
+            created_at = self._message_create_time(candidate)
+            return (
+                boundary is not None
+                and created_at is not None
+                and created_at > boundary
+            )
+
         blocks: list[str] = []
 
         if self.include_thread_history and thread_id:
             history = await self._fetch_thread_messages(client, thread_id)
-            rendered = self._render_history_block(history, exclude_ids={message_id})
+            rendered = self._render_history_block(
+                [item for item in history if after_reset(item)],
+                exclude_ids={message_id},
+            )
             if rendered:
                 blocks.append(f"[飞书话题历史 thread_id={thread_id}]\n{rendered}")
         elif self.include_parent_message and parent_id:
             parent = await self._fetch_message(client, parent_id)
-            rendered = self._render_message_line(parent) if parent else ""
+            rendered = (
+                self._render_message_line(parent)
+                if parent and after_reset(parent)
+                else ""
+            )
             if rendered:
                 blocks.append(f"[引用消息 message_id={parent_id}]\n{rendered}")
             elif root_id and root_id != parent_id:
                 root_msg = await self._fetch_message(client, root_id)
-                rendered = self._render_message_line(root_msg) if root_msg else ""
+                rendered = (
+                    self._render_message_line(root_msg)
+                    if root_msg and after_reset(root_msg)
+                    else ""
+                )
                 if rendered:
                     blocks.append(f"[根消息 message_id={root_id}]\n{rendered}")
 

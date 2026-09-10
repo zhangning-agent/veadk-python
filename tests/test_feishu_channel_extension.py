@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import json
 import sys
 import threading
 from types import ModuleType, SimpleNamespace
@@ -672,3 +673,176 @@ async def test_extension_prefers_sync_start_stop_over_async_connect():
     assert channel.stop_called is True
     assert channel.start_loop_running is False
     assert channel.stop_loop_running is False
+
+
+@pytest.mark.anyio
+async def test_session_command_new_resets_session_and_replies():
+    runner = FakeRunner()
+    channel = FakeChannel()
+    extension = FeishuChannelExtension(runner=runner, channel=channel)
+
+    # 1. First message uses default session_id
+    await extension._on_message(build_message(content_text="hello 1"))
+    assert len(runner.calls) == 1
+    assert runner.calls[0]["session_id"] == "oc_chat"
+
+    # 2. Send /new -> runner is NOT called, reset message is sent to channel
+    await extension._on_message(build_message(content_text="/new"))
+    assert len(runner.calls) == 1
+    assert len(channel.sent_messages) == 2
+    chat_id, body, options = channel.sent_messages[1]
+    assert chat_id == "oc_chat"
+    assert "已为您开启全新会话" in body["text"]
+
+    # 3. Next message uses the new session_id
+    await extension._on_message(build_message(content_text="hello 2"))
+    assert len(runner.calls) == 2
+    new_sess = runner.calls[1]["session_id"]
+    assert new_sess.startswith("oc_chat_")
+    assert new_sess != "oc_chat"
+
+
+@pytest.mark.anyio
+async def test_session_command_with_on_new_session_callback():
+    runner = FakeRunner()
+    channel = FakeChannel()
+    callback_calls = []
+
+    extension = FeishuChannelExtension(
+        runner=runner,
+        channel=channel,
+        on_new_session=lambda old_id, new_id: callback_calls.append((old_id, new_id)),
+    )
+
+    await extension._on_message(build_message(content_text="/reset"))
+    assert len(callback_calls) == 1
+    old_id, new_id = callback_calls[0]
+    assert old_id == "oc_chat"
+    assert new_id.startswith("oc_chat_")
+
+
+@pytest.mark.anyio
+async def test_session_command_with_remainder():
+    runner = FakeRunner()
+    channel = FakeChannel()
+    extension = FeishuChannelExtension(runner=runner, channel=channel)
+
+    # Sending "/new please help me" should reset session AND run the prompt
+    await extension._on_message(build_message(content_text="/new please help me"))
+    assert len(runner.calls) == 1
+    assert runner.calls[0]["messages"] == "please help me"
+    assert runner.calls[0]["session_id"].startswith("oc_chat_")
+
+
+@pytest.mark.anyio
+async def test_session_command_disabled():
+    runner = FakeRunner()
+    channel = FakeChannel()
+    extension = FeishuChannelExtension(
+        runner=runner,
+        channel=channel,
+        enable_session_commands=False,
+    )
+
+    await extension._on_message(build_message(content_text="/new"))
+    assert len(runner.calls) == 1
+    assert runner.calls[0]["messages"] == "/new"
+    assert runner.calls[0]["session_id"] == "oc_chat"
+
+
+def reference_message(message_id, text, create_time):
+    return SimpleNamespace(
+        message_id=message_id,
+        msg_type="text",
+        body=SimpleNamespace(content=json.dumps({"text": text})),
+        create_time=create_time,
+    )
+
+
+def thread_message(text, thread_id="thread_1", **kwargs):
+    return build_message(
+        content_text=text,
+        thread_id=thread_id,
+        conversation=SimpleNamespace(
+            chat_id="oc_chat", chat_type="group", thread_id=thread_id
+        ),
+        **kwargs,
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("command", ["/reset", "/reset new question"])
+async def test_reset_filters_history_and_preserves_other_threads(command):
+    runner = FakeRunner()
+    extension = FeishuChannelExtension(runner=runner, channel=FakeChannel())
+    extension._get_openapi_client = lambda: object()
+
+    async def fetch_history(client, thread_id):
+        return [
+            reference_message("old", "OLD_CONTEXT", "1000"),
+            reference_message("reset", command, "2000"),
+            reference_message("unknown", "UNKNOWN_CONTEXT", None),
+            reference_message("new", "NEW_CONTEXT", "3000"),
+        ]
+
+    extension._fetch_thread_messages = fetch_history
+    await extension._on_message(thread_message(command, create_time=2000))
+    if command != "/reset":
+        assert "OLD_CONTEXT" not in runner.calls[-1]["messages"]
+        assert "UNKNOWN_CONTEXT" not in runner.calls[-1]["messages"]
+        assert runner.calls[-1]["messages"].endswith("new question")
+    await extension._on_message(thread_message("continue", create_time=4000))
+    prompt = runner.calls[-1]["messages"]
+    assert "OLD_CONTEXT" not in prompt
+    assert "UNKNOWN_CONTEXT" not in prompt
+    assert "/reset" not in prompt
+    assert "NEW_CONTEXT" in prompt
+    assert runner.calls[-1]["session_id"].startswith("thread_1_")
+
+    await extension._on_message(thread_message("continue", thread_id="thread_2"))
+    assert "OLD_CONTEXT" in runner.calls[-1]["messages"]
+    assert runner.calls[-1]["session_id"] == "thread_2"
+
+    await extension._on_message(thread_message("/reset", create_time=5000))
+    await extension._on_message(thread_message("continue", create_time=6000))
+    assert runner.calls[-1]["messages"] == "continue"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("parent_time", ["1000", "2000", "3000", None, "invalid"])
+async def test_reset_filters_parent_and_root_references(parent_time):
+    runner = FakeRunner()
+    extension = FeishuChannelExtension(
+        runner=runner, channel=FakeChannel(), include_thread_history=False
+    )
+    extension._get_openapi_client = lambda: object()
+
+    async def fetch_message(client, message_id):
+        if message_id == "parent":
+            return reference_message("parent", "PARENT_CONTEXT", parent_time)
+        return reference_message("root", "ROOT_CONTEXT", "1000")
+
+    extension._fetch_message = fetch_message
+    await extension._on_message(thread_message("/reset", create_time="2000"))
+    await extension._on_message(
+        thread_message("continue", parent_id="parent", root_id="root")
+    )
+    prompt = runner.calls[-1]["messages"]
+    assert ("PARENT_CONTEXT" in prompt) == (parent_time == "3000")
+    assert "ROOT_CONTEXT" not in prompt
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("reset_time", [None, "invalid", 0])
+async def test_reset_without_valid_timestamp_excludes_external_history(reset_time):
+    runner = FakeRunner()
+    extension = FeishuChannelExtension(runner=runner, channel=FakeChannel())
+    extension._get_openapi_client = lambda: object()
+
+    async def fetch_history(client, thread_id):
+        return [reference_message("old", "OLD_CONTEXT", "1000")]
+
+    extension._fetch_thread_messages = fetch_history
+    await extension._on_message(thread_message("/reset", create_time=reset_time))
+    await extension._on_message(thread_message("continue"))
+    assert runner.calls[-1]["messages"] == "continue"

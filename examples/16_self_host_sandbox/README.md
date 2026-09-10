@@ -97,7 +97,7 @@ TOOL_FEISHU_CHANNEL_APP_SECRET=your_feishu_app_secret
 TOOL_FEISHU_CHANNEL_TRANSPORT=ws
 TOOL_FEISHU_CHANNEL_STREAMING=true
 TOOL_FEISHU_CHANNEL_REACTIONS=true
-TOOL_FEISHU_CHANNEL_SHOW_THINKING=true
+TOOL_FEISHU_CHANNEL_SHOW_THINKING=false # Disabled by default. Set to true or use --show-thinking to enable.
 TOOL_FEISHU_CHANNEL_SHOW_TOOL_CALLS=true
 TOOL_FEISHU_CHANNEL_SHOW_TOOL_RESULTS=true
 TOOL_FEISHU_CHANNEL_SEPARATE_TOOL_CALL_CARDS=true
@@ -108,7 +108,11 @@ TOOL_FEISHU_CHANNEL_CREATE_TOPIC=true
 Start the long-running process:
 
 ```bash
+# Thinking display is disabled by default
 bash examples/16_self_host_sandbox/run.sh --feishu
+
+# To display model thinking process, add --show-thinking
+python examples/16_self_host_sandbox/main.py --feishu --show-thinking
 ```
 
 The process keeps the Feishu WebSocket connected and reconnects automatically.
@@ -120,7 +124,9 @@ For each user message, this demo creates a Feishu topic containing one thinking
 card when thinking is available, one dedicated card for every tool call and its
 result, and a separate final-answer card. Missing stages do not create empty
 cards. Tool payloads are redacted for common credential fields and truncated
-to keep each card bounded.
+to keep each card bounded. Sending `/new` (or `/reset`, `/clear`) resets the
+current session and releases the previous sandbox so subsequent messages
+provision and run in a fresh remote sandbox session.
 
 
 `ShortTermMemory.after_create_session_callback` creates one remote Managed Session

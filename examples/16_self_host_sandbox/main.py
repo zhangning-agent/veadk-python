@@ -19,7 +19,11 @@ import asyncio
 import signal
 import uuid
 
-from agents.self_host_sandbox_agent.agent import agent, enable_sandbox_turn_lifecycle
+from agents.self_host_sandbox_agent.agent import (
+    agent,
+    enable_sandbox_turn_lifecycle,
+    sandbox_sessions,
+)
 from veadk import Runner
 from veadk.extensions import FeishuChannelExtension
 
@@ -27,18 +31,22 @@ from veadk.extensions import FeishuChannelExtension
 APP_NAME = "self_host_sandbox_demo"
 
 
-async def serve_feishu_channel(stop_event: asyncio.Event | None = None) -> None:
+async def serve_feishu_channel(
+    stop_event: asyncio.Event | None = None,
+    show_thinking: bool | None = None,
+) -> None:
     """Serve Feishu conversations until the process receives a stop signal."""
     runner = enable_sandbox_turn_lifecycle(Runner(agent=agent, app_name=APP_NAME))
     channel = FeishuChannelExtension(
         runner=runner,
         streaming=True,
-        show_thinking=True,
+        show_thinking=show_thinking,
         show_tool_calls=True,
         show_tool_results=True,
         separate_tool_call_cards=True,
         separate_thinking_card=True,
         create_topic=True,
+        on_new_session=lambda old_id, new_id: sandbox_sessions.release(old_id),
     )
     loop = asyncio.get_running_loop()
     shutdown_event = stop_event or asyncio.Event()
@@ -73,10 +81,16 @@ async def main() -> None:
         action="store_true",
         help="Keep running and serve conversations through the Feishu bot channel.",
     )
+    parser.add_argument(
+        "--show-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Show thinking/reasoning process (default: disabled, or controlled by TOOL_FEISHU_CHANNEL_SHOW_THINKING).",
+    )
     args = parser.parse_args()
 
     if args.feishu:
-        await serve_feishu_channel()
+        await serve_feishu_channel(show_thinking=args.show_thinking)
         return
 
     session_id = args.session_id or f"veadk-{uuid.uuid4()}"

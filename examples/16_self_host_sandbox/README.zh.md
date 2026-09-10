@@ -97,7 +97,7 @@ TOOL_FEISHU_CHANNEL_APP_SECRET=your_feishu_app_secret
 TOOL_FEISHU_CHANNEL_TRANSPORT=ws
 TOOL_FEISHU_CHANNEL_STREAMING=true
 TOOL_FEISHU_CHANNEL_REACTIONS=true
-TOOL_FEISHU_CHANNEL_SHOW_THINKING=true
+TOOL_FEISHU_CHANNEL_SHOW_THINKING=false # 默认关闭思考过程展示，设为 true 或使用 --show-thinking 开启
 TOOL_FEISHU_CHANNEL_SHOW_TOOL_CALLS=true
 TOOL_FEISHU_CHANNEL_SHOW_TOOL_RESULTS=true
 TOOL_FEISHU_CHANNEL_SEPARATE_TOOL_CALL_CARDS=true
@@ -108,7 +108,11 @@ TOOL_FEISHU_CHANNEL_CREATE_TOPIC=true
 启动常驻进程：
 
 ```bash
+# 默认不展示 Thinking 思考过程卡片
 bash examples/16_self_host_sandbox/run.sh --feishu
+
+# 如需展示 Thinking 思考过程，可添加 --show-thinking 参数
+python examples/16_self_host_sandbox/main.py --feishu --show-thinking
 ```
 
 进程会保持飞书 WebSocket 连接，断开后自动重连。飞书用户和会话分别映射为
@@ -117,7 +121,8 @@ VeADK 的 `user_id` 和 `session_id`，因此同一个飞书会话会复用上�
 每条用户消息会创建一个飞书话题。话题内的思考摘要使用一张独立卡片，
 每次 Tool call 及其对应的 Tool result 共用一张独立卡片，最终回答再使用
 一张独立卡片。没有产生的阶段不会创建空卡片。工具参数和结果会自动脱敏并截断，
-避免单张卡片超出飞书限制。
+避免单张卡片超出飞书限制。在聊天中发送 `/new`（或 `/reset`、`/clear`）可
+重置当前会话并释放旧沙箱，后续对话将自动绑定到全新创建的远端沙箱环境。
 
 
 每个新建的 VeADK Session 都通过 `POST /v1/sessions` 创建一个远端 Managed

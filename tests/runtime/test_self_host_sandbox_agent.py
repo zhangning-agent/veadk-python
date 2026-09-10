@@ -207,9 +207,21 @@ def test_feishu_channel_stays_up_until_stopped_and_shuts_down(monkeypatch):
     )
     assert calls[1][0] == "channel"
     assert isinstance(calls[1][1], _FakeRunner)
-    assert calls[1][2] == {
+    channel_kwargs = calls[1][2]
+    on_new_session = channel_kwargs.pop("on_new_session", None)
+    assert callable(on_new_session)
+    released = []
+    monkeypatch.setattr(
+        main_module.sandbox_sessions,
+        "release",
+        lambda sid: released.append(sid),
+    )
+    on_new_session("old-sess", "new-sess")
+    assert released == ["old-sess"]
+
+    assert channel_kwargs == {
         "streaming": True,
-        "show_thinking": True,
+        "show_thinking": None,
         "show_tool_calls": True,
         "show_tool_results": True,
         "separate_tool_call_cards": True,
@@ -218,3 +230,10 @@ def test_feishu_channel_stays_up_until_stopped_and_shuts_down(monkeypatch):
     }
     assert calls[2][0] == "start"
     assert calls[3] == ("shutdown", None)
+
+    # Verify explicit show_thinking=True override
+    calls.clear()
+    stop_event2 = asyncio.Event()
+    stop_event2.set()
+    asyncio.run(main_module.serve_feishu_channel(stop_event2, show_thinking=True))
+    assert calls[1][2]["show_thinking"] is True
