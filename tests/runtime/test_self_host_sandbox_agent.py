@@ -20,6 +20,8 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 EXAMPLE_DIR = Path(__file__).parents[2] / "examples" / "16_self_host_sandbox"
 if str(EXAMPLE_DIR) not in sys.path:
@@ -47,10 +49,14 @@ class _FakeClient:
         self.remote_session_id = remote_session_id
         self.created_titles = []
         self.idle_count = 0
+        self.posted_events = []
 
     def create_session(self, title: str):
         self.created_titles.append(title)
         self.session_id = self.remote_session_id
+
+    def post_events(self, events):
+        self.posted_events.extend(events)
 
     def post_status_idle(self):
         self.idle_count += 1
@@ -108,7 +114,7 @@ def test_runner_wrapper_ends_remote_turn_after_failure(monkeypatch):
     monkeypatch.setattr(
         agent_module.sandbox_sessions,
         "begin_turn",
-        lambda session_id: lifecycle_calls.append(("begin", session_id)),
+        lambda session_id, message=None: lifecycle_calls.append(("begin", session_id)),
     )
     monkeypatch.setattr(
         agent_module.sandbox_sessions,
@@ -237,3 +243,47 @@ def test_feishu_channel_stays_up_until_stopped_and_shuts_down(monkeypatch):
     stop_event2.set()
     asyncio.run(main_module.serve_feishu_channel(stop_event2, show_thinking=True))
     assert calls[1][2]["show_thinking"] is True
+
+
+def test_followup_turn_publishes_real_input_before_tools(monkeypatch):
+    manager = SandboxSessionManager()
+    client = _FakeClient("remote-1")
+    monkeypatch.setattr(manager, "_new_client", lambda: client)
+    monkeypatch.setattr(agent_module, "sandbox_sessions", manager)
+
+    class Runner:
+        async def run_async(self, **kwargs):
+            assert client.posted_events[-1] == {
+                "type": "user.message",
+                "content": [{"type": "text", "text": kwargs["new_message"].parts[0].text}],
+            }
+            yield "tool-result"
+
+    runner = agent_module.enable_sandbox_turn_lifecycle(Runner())
+
+    async def consume():
+        for text in ("Run printf first", "Run printf second"):
+            message = SimpleNamespace(parts=[SimpleNamespace(text=text)])
+            assert [event async for event in runner.run_async(
+                session_id="same-session", new_message=message
+            )] == ["tool-result"]
+
+    asyncio.run(consume())
+    assert len(client.created_titles) == 1
+    assert client.idle_count == 2
+    assert len(client.posted_events) == 2
+
+
+def test_failed_user_event_does_not_start_turn(monkeypatch):
+    manager = SandboxSessionManager()
+    client = _FakeClient("remote-1")
+    monkeypatch.setattr(manager, "_new_client", lambda: client)
+
+    def reject(events):
+        raise RuntimeError("event rejected")
+
+    monkeypatch.setattr(client, "post_events", reject)
+    with pytest.raises(RuntimeError, match="event rejected"):
+        manager.begin_turn("same-session", "Run printf test")
+    manager.end_turn("same-session")
+    assert client.idle_count == 0

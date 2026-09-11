@@ -127,11 +127,35 @@ VeADK 的 `user_id` 和 `session_id`，因此同一个飞书会话会复用上�
 
 每个新建的 VeADK Session 都通过 `POST /v1/sessions` 创建一个远端 Managed
 Session。用户消息和模型循环留在 VeADK；`DispatchRuntimeProvider` 拦截模型生成的
-Tool call，以 `agent.tool_use` 发送给 Runtime，等待匹配的 Tool result 后交还给本地
-VeADK 模型继续生成最终回复。远端 Session 首次创建时会自动入队；后续每个 turn
-以第一个真实的 `agent.tool_use` 事件让控制面重新入队并拉起空闲的 sandbox，
-同一 turn 内的其他 Tool call 复用已有 Worker。示例不会为了唤醒 sandbox 而伪造
-`user.message`；每个 turn 结束时发送一次 `session.status_idle`。
+Tool call，通过 `POST /v1/sessions/{session_id}/events` 将 `agent.tool_use`
+发送给 Runtime，等待匹配的 Tool result 后交还给本地
+VeADK 模型继续生成最终回复。每轮文本请求开始时，生命周期包装器通过同一
+`/events` 接口把该轮真实用户文本发送为 `user.message`，启动或继续 work。
+当前服务仅保存 `agent.tool_use` 不会唤醒已空闲的 session；后续工具调用复用 Worker。
+每个 turn 结束时发送一次 `session.status_idle`。
+
+## 生命周期测试
+
+配置好当前进程的 Runtime 连接变量和 `MODEL_AGENT_API_KEY` 后运行：
+
+```bash
+python examples/16_self_host_sandbox/lifecycle_test.py \
+  --tae-sandbox-id 44nffoq7 \
+  --command-timeout-seconds 600 \
+  --reclaim-timeout-seconds 420
+```
+
+测试通过 VeADK 发送两条消息，中间轮询 TAE API 等待首个实例回收。
+两轮都必须有匹配的成功工具结果及最终回复，VeADK / Managed Session ID
+保持不变，第二轮 TAE 实例 ID 必须不同。日志以 JSON 输出阶段、实例 ID 和耗时；
+最终 `status: passed` 表示通过，失败以非零退出码结束。第二轮结束后标记 idle，
+由 dispatcher 按正常策略回收，不主动删除实例。
+
+Runtime 由 `ANTHROPIC_BASE_URL`、`ANTHROPIC_ENVIRONMENT_ID` 和
+`ANTHROPIC_ENVIRONMENT_KEY` 选择；测试 `s764q7yu` 时必须使用其连接配置。
+SDK 的 base URL 不应重复包含 `/v1`。TAE 查询默认使用 BOE endpoint，
+鉴权复用本地 `bytedcli` 登录，也可设置 `TAE_JWT_TOKEN`。
+`--mode tool` 可跳过模型，直接验证工具调用的回收与唤醒。
 
 ## Docker 与 Kubernetes 部署
 

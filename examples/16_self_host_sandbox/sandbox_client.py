@@ -30,6 +30,7 @@ import logging
 import os
 import re
 import shlex
+import threading
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -67,6 +68,7 @@ class SelfHostSandboxClient:
             "SANDBOX_AGENT_ID", "agent_011CSd8hFhXGpz33bM1pBw7y"
         )
         self.session_id = session_id or os.getenv("SANDBOX_SESSION_ID")
+        self._event_lock = threading.Lock()
 
         raw_token = (
             bearer_token
@@ -121,7 +123,8 @@ class SelfHostSandboxClient:
             environment_id=self.environment_id,
             title=title,
         )
-        self.session_id = sess.id
+        with self._event_lock:
+            self.session_id = sess.id
         logger.info(
             "Session %s created on remote Runtime via Anthropic SDK.", self.session_id
         )
@@ -200,16 +203,17 @@ class SelfHostSandboxClient:
         if not self.session_id:
             return
         try:
-            self.post_events(
-                [
-                    {
-                        "type": "session.status_idle",
-                        "stop_reason": {
-                            "type": stop_reason,
-                        },
-                    }
-                ]
-            )
+            with self._event_lock:
+                self.post_events(
+                    [
+                        {
+                            "type": "session.status_idle",
+                            "stop_reason": {
+                                "type": stop_reason,
+                            },
+                        }
+                    ]
+                )
             logging.info(
                 "Session %s marked status_idle (%s).", self.session_id, stop_reason
             )
@@ -356,20 +360,21 @@ class SelfHostSandboxClient:
         timeout_seconds = timeout or float(self.timeout)
         command = html.unescape(command)
         tool_use_id = dispatch_id or f"toolu_{uuid.uuid4().hex}"
-        self.post_events(
-            [
-                {
-                    "type": "agent.tool_use",
-                    "id": tool_use_id,
-                    "name": self.remote_bash_tool_name,
-                    "input": {
-                        "command": command,
-                        "timeout_ms": int(timeout_seconds * 1000),
-                        "timeout": int(timeout_seconds * 1000),
-                    },
-                }
-            ]
-        )
+        with self._event_lock:
+            self.post_events(
+                [
+                    {
+                        "type": "agent.tool_use",
+                        "id": tool_use_id,
+                        "name": self.remote_bash_tool_name,
+                        "input": {
+                            "command": command,
+                            "timeout_ms": int(timeout_seconds * 1000),
+                            "timeout": int(timeout_seconds * 1000),
+                        },
+                    }
+                ]
+            )
         return self._wait_for_tool_result(
             timeout=timeout_seconds,
             tool_use_id=tool_use_id,

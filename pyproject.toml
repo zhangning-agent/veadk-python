@@ -141,6 +141,9 @@ dev = [
 ]
 
 
+[tool.uv.sources]
+anthropic = { git = "https://github.com/mofanke/anthropic-sdk-python", rev = "34986b8fcb00f2dc5c25c0c90ca9a13dafc7650d" }
+
 [tool.setuptools.packages.find]
 include = [
     "veadk*",

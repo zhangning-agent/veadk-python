@@ -132,12 +132,38 @@ provision and run in a fresh remote sandbox session.
 `ShortTermMemory.after_create_session_callback` creates one remote Managed Session
 for each newly created VeADK session. VeADK handles the user message and model
 loop locally. `DispatchRuntimeProvider` intercepts each model tool call, posts an
-`agent.tool_use`, waits for its matching tool result, and returns that result to
+`agent.tool_use` through `POST /v1/sessions/{session_id}/events`, waits for its
+matching tool result, and returns that result to
 the local VeADK model loop. Creating the remote Session enqueues its first turn.
-On a later turn, the first real `agent.tool_use` event lets the control plane
-enqueue work and start an idle sandbox again; additional tool calls in that turn
-reuse the same worker. The demo never posts a synthetic `user.message` to wake a
-sandbox. Every turn finishes with one `session.status_idle` event.
+At the beginning of each text turn, the lifecycle wrapper sends the actual user
+text as `user.message` through the same `/events` endpoint to start or resume
+work. `agent.tool_use` alone only appends a tool event and does not wake an idle
+session on the current service. Further tool calls reuse the worker. Every turn finishes with one `session.status_idle` event.
+
+## Lifecycle test
+
+Configure the Runtime connection variables and `MODEL_AGENT_API_KEY` in the
+process environment, then run:
+
+```bash
+python examples/16_self_host_sandbox/lifecycle_test.py \
+  --tae-sandbox-id 44nffoq7 \
+  --command-timeout-seconds 600 \
+  --reclaim-timeout-seconds 420
+```
+
+The test sends two VeADK messages and polls TAE for reclamation between them.
+Both turns require a successful matching remote tool result and final reply.
+VeADK and Managed Session IDs must stay the same; the second TAE instance ID
+must differ. JSON progress includes instance IDs and elapsed times. The final
+`status: passed` indicates success; failures exit nonzero. The final turn marks
+the session idle for normal dispatcher cleanup without explicitly deleting it.
+
+`ANTHROPIC_BASE_URL`, `ANTHROPIC_ENVIRONMENT_ID`, and `ANTHROPIC_ENVIRONMENT_KEY`
+select the Runtime; use the connection settings for `s764q7yu` when testing it.
+Avoid a duplicate `/v1` prefix in the SDK base URL. TAE observation defaults to
+the BOE endpoint and reuses local `bytedcli` authentication, or `TAE_JWT_TOKEN`.
+Use `--mode tool` for a direct tool dispatch test without model inference.
 
 ## Docker and Kubernetes deployment
 

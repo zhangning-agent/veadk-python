@@ -13,9 +13,12 @@
 # limitations under the License.
 
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
+import httpx2
+import pytest
 
 CLIENT_PATH = (
     Path(__file__).parents[2]
@@ -185,3 +188,55 @@ def test_non_mcp_tools_are_mapped_to_bash_and_unknown_tools_fail():
         assert "add an explicit bash adapter" in str(error)
     else:
         raise AssertionError("unknown non-MCP tools must fail closed")
+
+
+def test_followup_tool_calls_only_use_session_events():
+    requests = []
+    events = []
+
+    def handler(request):
+        requests.append((request.method, request.url.path))
+        assert request.url.path == "/v1/sessions/session-123/events"
+        if request.method == "POST":
+            posted = json.loads(request.content)["events"]
+            for event in posted:
+                events.append(event)
+                if event["type"] == "agent.tool_use":
+                    events.append({
+                        "type": "user.tool_result", "tool_use_id": event["id"],
+                        "content": "exit=0\nmessage-ok", "is_error": False,
+                    })
+            return httpx2.Response(200, json={"data": posted})
+        return httpx2.Response(200, json={"data": events, "has_more": False})
+
+    client = _client()
+    client.client.close()
+    with MODULE.anthropic.Anthropic(
+        base_url="https://sandbox.example.com", auth_token="token", api_key=None,
+        http_client=httpx2.Client(transport=httpx2.MockTransport(handler)),
+    ) as api:
+        client.client = api
+        for turn in range(3):
+            result = client.execute_command("printf message-ok", timeout=1, dispatch_id=f"call-{turn}")
+            assert result["status"] == "completed"
+            assert result["tool_use_id"] == f"call-{turn}"
+            client.post_status_idle()
+    assert [event["type"] for event in events] == ["agent.tool_use", "user.tool_result", "session.status_idle"] * 3
+    assert [method for method, _ in requests] == ["POST", "GET", "POST"] * 3
+
+
+def test_failed_followup_event_does_not_wait_or_use_another_endpoint(monkeypatch):
+    client = _client()
+    monkeypatch.setattr(client, "post_events", lambda _: None)
+    client.post_status_idle()
+
+    def fail(_):
+        raise RuntimeError("event unavailable")
+
+    def unexpected_wait(**kwargs):
+        pytest.fail("must not wait when the event failed to send")
+
+    monkeypatch.setattr(client, "post_events", fail)
+    monkeypatch.setattr(client, "_wait_for_tool_result", unexpected_wait)
+    with pytest.raises(RuntimeError, match="event unavailable"):
+        client.execute_command("true")

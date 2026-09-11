@@ -72,14 +72,25 @@ class SandboxSessionManager:
             )
         return client.session_id or ""
 
-    def begin_turn(self, veadk_session_id: str) -> None:
-        """Track a local turn without writing a synthetic Session event."""
+    def begin_turn(
+        self, veadk_session_id: str, user_message: str | None = None
+    ) -> None:
+        """Publish the real user input to start work for this local turn."""
         key = veadk_session_id or "__default__"
         client = self.get(key)
         if not client.session_id:
             self.create_remote_session(key)
 
         with self._lock:
+            if user_message:
+                client.post_events(
+                    [
+                        {
+                            "type": "user.message",
+                            "content": [{"type": "text", "text": user_message}],
+                        }
+                    ]
+                )
             self._active_turns[key] = self._active_turns.get(key, 0) + 1
 
     def end_turn(self, veadk_session_id: str) -> None:
@@ -125,7 +136,19 @@ def enable_sandbox_turn_lifecycle(runner: Any) -> Any:
                 yield event
             return
 
-        await asyncio.to_thread(sandbox_sessions.begin_turn, session_id)
+        new_message = kwargs.get("new_message")
+        user_message = (
+            new_message
+            if isinstance(new_message, str)
+            else "\n".join(
+                part.text
+                for part in (getattr(new_message, "parts", None) or [])
+                if getattr(part, "text", None) and not getattr(part, "thought", False)
+            )
+        )
+        await asyncio.to_thread(
+            sandbox_sessions.begin_turn, session_id, user_message or None
+        )
         try:
             async for event in original_run_async(*args, **kwargs):
                 yield event
