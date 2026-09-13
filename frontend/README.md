@@ -943,3 +943,6 @@ it natively. Each component lives in its own self-registering directory under
 view, so a catalog/renderer mismatch never breaks the page. To add a component,
 drop a folder there (frontend) and declare it in the agent's catalog (backend —
 see `veadk.a2ui.BaseA2UICatalog`).
+
+Managed Agents 会话页将消息记录与输入框放在固定网格行中：消息记录独立滚动，
+连接提示出现或消失时，输入框仍保留在会话面板底部。

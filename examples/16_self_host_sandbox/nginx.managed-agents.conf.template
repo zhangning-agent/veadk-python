@@ -1,3 +1,8 @@
+map $http_anthropic_worker_id $managed_agents_worker_id {
+    default $http_anthropic_worker_id;
+    "" $http_ark_worker_id;
+}
+
 server {
     listen 8080;
     server_name _;
@@ -15,6 +20,21 @@ server {
         default_type application/json;
         add_header Cache-Control "no-store";
         return 200 '{"controlBasePath":"/api","taskBasePath":"/v1","sseEnabled":true,"pollingIntervalMs":1500,"title":"Managed Agents"}';
+    }
+
+    # ma-server owns account routing; worker credentials pass through unchanged.
+    location /task-server/v1/ {
+        if ($http_authorization = "") { return 401; }
+        proxy_pass http://ma-server:8000;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 1h;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Anthropic-Worker-ID $managed_agents_worker_id;
+        proxy_set_header Accept-Encoding "";
     }
 
     # Agents, local Environments and the local Session index belong to
@@ -45,11 +65,25 @@ server {
         proxy_set_header Accept-Encoding "";
     }
 
-    # Official Environment Work routes are cluster-internal only. Agent Loop
-    # workers use the official SDK directly against ma-server.
+    # Environment discovery stays private. Work routes are reachable by the
+    # managed AgentKit Runtime and belong to Task Server's tool queue.
+    # Preserve Environment/Work bearer tokens; Agent Loop polls ma-server internally.
     location = /v1/environments { return 404; }
     location ~ ^/v1/environments/[^/]+/work(?:/|$) {
-        return 404;
+        if ($http_authorization = "") { return 401; }
+        proxy_pass ${TASK_SERVER_BASE_URL};
+        proxy_http_version 1.1;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $proxy_host;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 6m;
+        proxy_read_timeout 6m;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Anthropic-Worker-ID $managed_agents_worker_id;
+        proxy_set_header X-Top-Account-Id "${X_TOP_ACCOUNT_ID}";
+        proxy_set_header anthropic-beta "managed-agents-2026-04-01";
+        proxy_set_header Accept-Encoding "";
     }
 
     # SSE is read-only, so it can stream directly from Task Server without
@@ -70,9 +104,23 @@ server {
         add_header X-Accel-Buffering no always;
     }
 
-    # ma-server proxies the cloud Task Server and also enqueues one local Agent
-    # Loop work item for every user.message. It remains the sole source of truth
-    # for the local work ledger; Session/event bytes remain on Task Server.
+    # Official Anthropic SDK Session creation passes through ma-server so
+    # local Agent/Environment snapshots and the Session index stay coherent.
+    location = /v1/sessions {
+        proxy_pass http://ma-server:8000;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 6m;
+        proxy_read_timeout 6m;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization "Bearer ${MA_SERVER_API_TOKEN}";
+        proxy_set_header Accept-Encoding "";
+    }
+
+    # ma-server proxies the cloud Task Server and drives local Agent execution.
+    # The Task Server enqueues sandbox work only after agent.tool_use; ma-server
+    # remains the source of truth for its own Agent Loop work ledger, while
+    # Session/event bytes remain on Task Server.
     location ~ ^/v1/sessions/[^/]+(?:/events(?:/stream)?|)$ {
         proxy_pass http://ma-server:8000;
         proxy_http_version 1.1;

@@ -80,6 +80,8 @@ export interface ManagedAgentEvent {
   name?: string;
   text?: string;
   delta?: string;
+  event_id?: string;
+  event?: { type?: string; id?: string };
   status?: string;
   stop_reason?: {
     type?: string;
@@ -349,6 +351,20 @@ export class ManagedAgentsClient {
     if (!response.ok) throw await responseError(response, "发送消息");
   }
 
+  async interruptSession(sessionId: string, signal?: AbortSignal): Promise<void> {
+    const response = await this.request(
+      this.controlBasePath,
+      "/sessions/" + encodeSegment(sessionId) + "/events",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ events: [{ type: "user.interrupt" }] }),
+        signal,
+      },
+    );
+    if (!response.ok) throw await responseError(response, "停止执行");
+  }
+
   async listEvents(
     sessionId: string,
     options: ManagedEventListOptions = {},
@@ -376,6 +392,7 @@ export class ManagedAgentsClient {
   ): AsyncGenerator<ManagedAgentEvent, void, unknown> {
     const query = new URLSearchParams();
     if (options.replay !== false) query.set("replay", "1");
+    query.set("include", "chunks");
     const suffix = query.size ? "?" + query : "";
     const response = await this.request(
       this.taskBasePath,

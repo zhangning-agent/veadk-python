@@ -161,7 +161,17 @@ ID 的 Work API 由 ma-server 实现，Session/Event 仍保存在云 Task Server
   集群内 Worker 使用，不通过浏览器 Gateway 暴露。
 - `127.0.0.1:18081`：仅监听 localhost 的 ma-server 官方 Environment Work 入口，
   供三个 Agent Loop 进程使用。
-- `127.0.0.1:55432`：VeADK `DatabaseSessionService` 使用的 PostgreSQL。
+
+数据库统一使用云 PostgreSQL，本地 Compose 和 VKE 清单均不再创建 PostgreSQL。
+在 `.env` 中设置 `MA_DATABASE_URL`（`postgresql+psycopg://...`）和
+`VEADK_MANAGED_SESSION_DB_URL`（`postgresql+asyncpg://...`），指向同一个云数据库；
+本地运行完整后端时，需要可达该数据库的网络和对应的访问白名单。
+当前 `zn_test` 实例地址为 `postgresba6eaa3d42f0.rds-pg.ivolces.com:5432`，
+数据库和应用账号均为 `veadk`，会话 schema 为 `managed_agents`。
+VKE 的数据库凭据保存在 `managed-agents-postgres-auth` Secret 中，密码不写入仓库。
+本地开发页面若通过 `MANAGED_AGENTS_API_TARGET` 连接 VKE 网关，则直接复用
+VKE 后端的数据库连接，无需在本地运行数据库。
+迁移校验、白名单和账号权限排查见 [云 PostgreSQL 迁移记录](k8s/RDS_MIGRATION.md)。
 
 `ma-server` 在本地保存 Agent 定义，并在创建 Task Server session 时将 Agent ID
 转换为不可变的 `agent_with_overrides` 快照。配置现有 `.env` 后执行：
@@ -171,7 +181,7 @@ ID 的 Work API 由 ma-server 实现，Session/Event 仍保存在云 Task Server
 uv pip install --python .venv/bin/python -e \
   /home/mofanke/github/agent-ma/anthropic-sdk-python
 
-# 启动 PostgreSQL、ma-server 和 Nginx；Worker API 仅监听 127.0.0.1:18081。
+# 启动 ma-server 和 Nginx，连接云 PostgreSQL；Worker API 仅监听 127.0.0.1:18081。
 bash examples/16_self_host_sandbox/local_managed_agents_stack.sh up
 
 # 先启动三个平等 Worker，再创建 Agent/Session，执行三轮并验证跨进程恢复。

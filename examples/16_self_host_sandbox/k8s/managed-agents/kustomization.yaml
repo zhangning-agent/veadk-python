@@ -6,7 +6,7 @@ resources:
   # managed-agents-config is created from deployment-specific values.
   # configmap.yaml is a safe example only.
   - gateway-configmap.yaml
-  - postgres.yaml
+  - task-server.yaml
   - ma-server.yaml
   - agent-loop-worker.yaml
   - gateway.yaml

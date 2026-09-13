@@ -18,9 +18,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
+from google.adk.agents import RunConfig
+from google.adk.agents.run_config import StreamingMode
 from google.genai import types
 from sandbox_client import SelfHostSandboxClient
 
@@ -33,6 +38,16 @@ _TERMINAL_EVENT_TYPES = {
     "session.status_terminated",
     "session.error",
 }
+
+
+@dataclass(slots=True)
+class ManagedAgentEventState:
+    """Incremental event state shared by handlers for one Managed Session."""
+
+    completed_inputs: set[str] = field(default_factory=set)
+    cursor_seq: int | None = None
+    history_reconciled: bool = False
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
 
 class ManagedAgentsLoop:
@@ -51,6 +66,7 @@ class ManagedAgentsLoop:
         session_client: SelfHostSandboxClient | None = None,
         session_id: str | None = None,
         user_id: str = "managed_agents_user",
+        event_state: ManagedAgentEventState | None = None,
     ) -> None:
         resolved_session_id = session_id or getattr(session_client, "session_id", None)
         if not resolved_session_id:
@@ -61,7 +77,27 @@ class ManagedAgentsLoop:
         self.session_client = session_client
         self.session_id = str(resolved_session_id)
         self.user_id = user_id
-        self._completed_inputs: set[str] = set()
+        self._event_state = event_state or ManagedAgentEventState()
+
+    @property
+    def _completed_inputs(self) -> set[str]:
+        return self._event_state.completed_inputs
+
+    @property
+    def _event_cursor_seq(self) -> int | None:
+        return self._event_state.cursor_seq
+
+    @_event_cursor_seq.setter
+    def _event_cursor_seq(self, value: int | None) -> None:
+        self._event_state.cursor_seq = value
+
+    @property
+    def _history_reconciled(self) -> bool:
+        return self._event_state.history_reconciled
+
+    @_history_reconciled.setter
+    def _history_reconciled(self, value: bool) -> None:
+        self._event_state.history_reconciled = value
 
     async def run(
         self,
@@ -134,19 +170,25 @@ class ManagedAgentsLoop:
     async def run_pending(self, sdk: Any, *, max_turns: int | None = 1) -> int:
         """Process persisted, incomplete user messages for one claimed work item.
 
-        The Task Server work lease is the ownership boundary. Reading the
-        durable event ledger after the claim also makes this path safe when the
-        worker starts after the triggering SSE frame was originally emitted.
+        The first pass reconciles the complete durable ledger so a replacement
+        worker can recover work that arrived before it started. Later passes
+        use the last observed event sequence as a cursor and read only newer
+        events. Handlers for the same Session serialize through their shared
+        event state so concurrent WorkItems cannot advance the cursor past an
+        unprocessed message.
         """
-        events = [
-            event
-            async for event in sdk.beta.sessions.events.list(
-                self.session_id, limit=1000, order="asc"
-            )
-        ]
-        self._restore_completed_inputs(events)
+        async with self._event_state.lock:
+            return await self._run_pending_locked(sdk, max_turns=max_turns)
+
+    async def _run_pending_locked(self, sdk: Any, *, max_turns: int | None) -> int:
+        previous_cursor = self._event_cursor_seq if self._history_reconciled else None
+        events, full_reconciliation = await self._list_pending_events(sdk)
+        if full_reconciliation:
+            self._restore_completed_inputs(events)
         turns = 0
-        for event in events:
+        consumed = 0
+        for index, event in enumerate(events):
+            consumed = index + 1
             if self._value(event, "type") != "user.message":
                 continue
             event_id = str(self._value(event, "id") or "")
@@ -158,6 +200,130 @@ class ManagedAgentsLoop:
             turns += 1
             if max_turns is not None and turns >= max_turns:
                 break
+        self._history_reconciled = True
+        self._advance_event_cursor(events[:consumed], previous=previous_cursor)
+        return turns
+
+    async def _list_pending_events(self, sdk: Any) -> tuple[list[Any], bool]:
+        """Read a recovery snapshot once, then advance through new events."""
+        cursor_seq = self._event_cursor_seq if self._history_reconciled else None
+        incremental = cursor_seq is not None
+        try:
+            events = await self._list_events_after(sdk, cursor_seq)
+            if incremental and any(
+                (seq := self._event_seq(event)) is not None and seq <= cursor_seq
+                for event in events
+            ):
+                raise RuntimeError("event server did not advance the requested cursor")
+            full_reconciliation = cursor_seq is None
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if not incremental:
+                raise
+            logger.warning(
+                "Managed Session event cursor failed; reconciling full history once",
+                exc_info=True,
+            )
+            full_history = await self._list_events_after(sdk, None)
+            self._restore_completed_inputs(full_history)
+            events = full_history
+            full_reconciliation = False
+
+        if incremental:
+            # A server that ignores ``page`` must not make an already-consumed
+            # user.message visible to the execution loop again. Missing seq is
+            # retained so correctness falls back to the completed-input guard.
+            events = [
+                event
+                for event in events
+                if (seq := self._event_seq(event)) is None or seq > cursor_seq
+            ]
+
+        return events, full_reconciliation
+
+    async def _list_events_after(self, sdk: Any, cursor_seq: int | None) -> list[Any]:
+        options: dict[str, Any] = {"limit": 1000, "order": "asc"}
+        if cursor_seq is not None:
+            options["page"] = f"seq_{cursor_seq}"
+        return [
+            event
+            async for event in sdk.beta.sessions.events.list(self.session_id, **options)
+        ]
+
+    def _advance_event_cursor(self, events: list[Any], *, previous: int | None) -> None:
+        if not events:
+            if previous is None:
+                self._event_cursor_seq = 0
+            return
+        sequences = [self._event_seq(event) for event in events]
+        if any(sequence is None for sequence in sequences):
+            # Custom/older servers may omit sequence metadata. Keep correctness
+            # by using full reconciliation on the next pass instead of risking
+            # a cursor that skips an event.
+            self._event_cursor_seq = None
+            logger.warning(
+                "Managed Session events omitted sequence metadata; "
+                "next poll will reconcile full history"
+            )
+            return
+        self._event_cursor_seq = max(previous or 0, *(int(seq) for seq in sequences))
+
+    async def run_claimed(
+        self,
+        sdk: Any,
+        *,
+        environment_id: str,
+        work_id: str,
+        last_heartbeat: str = "NO_HEARTBEAT",
+        poll_interval: float = 1.0,
+        heartbeat_interval: float | None = None,
+    ) -> int:
+        turns = 0
+        stopped = asyncio.Event()
+        if heartbeat_interval is None:
+            heartbeat_interval = float(
+                os.getenv("MANAGED_AGENT_HEARTBEAT_INTERVAL_SECONDS", "2")
+            )
+        if heartbeat_interval <= 0:
+            raise ValueError("heartbeat_interval must be positive")
+
+        async def heartbeat() -> None:
+            nonlocal last_heartbeat
+            while not stopped.is_set():
+                response = await sdk.beta.environments.work.heartbeat(
+                    work_id,
+                    environment_id=environment_id,
+                    expected_last_heartbeat=last_heartbeat,
+                    desired_ttl_seconds=90,
+                )
+                if not response.lease_extended:
+                    raise RuntimeError("Managed work lease is no longer active")
+                last_heartbeat = response.last_heartbeat
+                try:
+                    await asyncio.wait_for(stopped.wait(), timeout=heartbeat_interval)
+                except TimeoutError:
+                    pass
+
+        async def consume() -> None:
+            nonlocal turns
+            while True:
+                session = await sdk.beta.sessions.retrieve(self.session_id)
+                if self._value(session, "status") in {"terminated", "deleted"}:
+                    return
+                turns += await self.run_pending(sdk, max_turns=None)
+                await asyncio.sleep(poll_interval)
+
+        tasks = [asyncio.create_task(consume()), asyncio.create_task(heartbeat())]
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
+        finally:
+            stopped.set()
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         return turns
 
     def _restore_completed_inputs(self, events: list[Any]) -> None:
@@ -210,13 +376,22 @@ class ManagedAgentsLoop:
                 )
 
             message = types.Content(role="user", parts=[types.Part(text=prompt)])
-            async for event in self.runner.run_async(
-                user_id=self.user_id,
-                session_id=self.session_id,
-                new_message=message,
-            ):
-                self._merge_usage(usage, getattr(event, "usage_metadata", None))
-                await self._publish_runner_event(sdk, event)
+            stream_ids: dict[str, str] = {}
+            try:
+                async for event in self.runner.run_async(
+                    user_id=self.user_id,
+                    session_id=self.session_id,
+                    new_message=message,
+                    run_config=RunConfig(streaming_mode=StreamingMode.SSE),
+                ):
+                    self._merge_usage(usage, getattr(event, "usage_metadata", None))
+                    await self._publish_runner_event(sdk, event, stream_ids=stream_ids)
+            except asyncio.CancelledError:
+                await asyncio.shield(
+                    self._close_transient_streams(sdk, stream_ids, status="aborted")
+                )
+                raise
+            await self._close_transient_streams(sdk, stream_ids, status="completed")
 
             await sdk.beta.sessions.events.send(
                 self.session_id,
@@ -233,6 +408,20 @@ class ManagedAgentsLoop:
                 ],
             )
         except asyncio.CancelledError:
+            events: list[dict[str, Any]] = []
+            if span_id:
+                events.append(
+                    {
+                        "type": "span.model_request_end",
+                        "model_request_start_id": span_id,
+                        "model_usage": usage,
+                        "is_error": True,
+                    }
+                )
+            if events:
+                await asyncio.shield(
+                    sdk.beta.sessions.events.send(self.session_id, events=events)
+                )
             raise
         except Exception as error:
             logger.exception("Managed Agents turn failed")
@@ -263,8 +452,38 @@ class ManagedAgentsLoop:
                 session_id=self.session_id,
             )
 
-    async def _publish_runner_event(self, sdk: Any, event: Any) -> None:
-        if bool(getattr(event, "partial", False)):
+    async def _publish_runner_event(
+        self, sdk: Any, event: Any, *, stream_ids: dict[str, str]
+    ) -> None:
+        partial = bool(getattr(event, "partial", False))
+        content = getattr(event, "content", None)
+        if partial:
+            for part in getattr(content, "parts", None) or []:
+                text = str(getattr(part, "text", "") or "")
+                if not text:
+                    continue
+                kind = (
+                    "thinking" if bool(getattr(part, "thought", False)) else "message"
+                )
+                stream_id = stream_ids.get(kind)
+                if stream_id is None:
+                    stream_id = f"sevt-{uuid.uuid4().hex}"
+                    stream_ids[kind] = stream_id
+                    await self._publish_transient(
+                        sdk,
+                        {
+                            "type": f"agent.{kind}_stream_start",
+                            f"{kind}_id": stream_id,
+                        },
+                    )
+                await self._publish_transient(
+                    sdk,
+                    {
+                        "type": f"agent.{kind}_chunk",
+                        f"{kind}_id": stream_id,
+                        "delta": text,
+                    },
+                )
             return
 
         # Remote tools publish agent.tool_use before execution and the client
@@ -274,35 +493,102 @@ class ManagedAgentsLoop:
             return
 
         output_events: list[dict[str, Any]] = []
-        content = getattr(event, "content", None)
         for part in getattr(content, "parts", None) or []:
             text = str(getattr(part, "text", "") or "")
             if not text:
                 continue
             if bool(getattr(part, "thought", False)):
+                thinking_id = stream_ids.pop("thinking", None)
+                if thinking_id is not None:
+                    await self._publish_transient(
+                        sdk,
+                        {
+                            "type": "agent.thinking_stream_end",
+                            "thinking_id": thinking_id,
+                            "status": "completed",
+                        },
+                    )
+                else:
+                    thinking_id = f"sevt-{uuid.uuid4().hex}"
                 output_events.append(
                     {
                         "type": "agent.thinking",
-                        "thinking_id": f"thinking_{uuid.uuid4().hex}",
+                        "thinking_id": thinking_id,
                         "text": text,
                     }
                 )
             else:
+                message_id = stream_ids.pop("message", None)
+                if message_id is not None:
+                    await self._publish_transient(
+                        sdk,
+                        {
+                            "type": "agent.message_stream_end",
+                            "message_id": message_id,
+                            "status": "completed",
+                        },
+                    )
+                else:
+                    message_id = f"sevt-{uuid.uuid4().hex}"
                 output_events.append(
                     {
                         "type": "agent.message",
-                        "message_id": f"message_{uuid.uuid4().hex}",
+                        "message_id": message_id,
                         "content": [{"type": "text", "text": text}],
                     }
                 )
         if output_events:
             await sdk.beta.sessions.events.send(self.session_id, events=output_events)
 
+    async def _publish_transient(self, sdk: Any, event: dict[str, Any]) -> None:
+        event = {
+            "id": f"transient-{uuid.uuid4().hex}",
+            "processed_at": datetime.now(UTC).isoformat(),
+            **event,
+        }
+        try:
+            await sdk.post(
+                f"/v1/sessions/{self.session_id}/events/transient",
+                cast_to=dict[str, Any],
+                body={"events": [event]},
+            )
+        except Exception:
+            logger.warning(
+                "Managed Agents transient stream publish failed type=%s",
+                event.get("type"),
+                exc_info=True,
+            )
+
+    async def _close_transient_streams(
+        self, sdk: Any, stream_ids: dict[str, str], *, status: str
+    ) -> None:
+        for kind, stream_id in list(stream_ids.items()):
+            await self._publish_transient(
+                sdk,
+                {
+                    "type": f"agent.{kind}_stream_end",
+                    f"{kind}_id": stream_id,
+                    "status": status,
+                },
+            )
+            stream_ids.pop(kind, None)
+
     @staticmethod
     def _value(value: Any, name: str) -> Any:
         return (
             value.get(name) if isinstance(value, dict) else getattr(value, name, None)
         )
+
+    @classmethod
+    def _event_seq(cls, event: Any) -> int | None:
+        value = cls._value(event, "seq")
+        if value is None:
+            value = cls._value(event, "_seq")
+        try:
+            sequence = int(value)
+        except (TypeError, ValueError):
+            return None
+        return sequence if sequence >= 0 else None
 
     @staticmethod
     def _message_text(content: Any) -> str:

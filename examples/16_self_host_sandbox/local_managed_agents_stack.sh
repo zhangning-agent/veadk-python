@@ -17,27 +17,16 @@ load_env() {
     export TASK_SERVER_API_KEY="${TASK_SERVER_API_KEY:-$ANTHROPIC_ENVIRONMENT_KEY}"
     export TASK_SERVER_ACCOUNT_ID="${TASK_SERVER_ACCOUNT_ID:-${X_TOP_ACCOUNT_ID:-}}"
     export MA_SERVER_API_TOKEN="${MA_SERVER_API_TOKEN:-$ANTHROPIC_ENVIRONMENT_KEY}"
-    export POSTGRES_PORT="${POSTGRES_PORT:-55432}"
     export MA_SERVER_PORT="${MA_SERVER_PORT:-18081}"
     export MANAGED_AGENTS_GATEWAY_PORT="${MANAGED_AGENTS_GATEWAY_PORT:-18080}"
-    export VEADK_MANAGED_SESSION_DB_URL="${VEADK_MANAGED_SESSION_DB_URL:-postgresql+asyncpg://veadk:veadk@127.0.0.1:${POSTGRES_PORT}/veadk}"
+    : "${MA_DATABASE_URL:?set MA_DATABASE_URL to the cloud PostgreSQL database}"
+    : "${VEADK_MANAGED_SESSION_DB_URL:?set VEADK_MANAGED_SESSION_DB_URL to the cloud PostgreSQL database}"
+    export MA_DATABASE_URL VEADK_MANAGED_SESSION_DB_URL
 }
 
 up() {
     load_env
-    docker compose -f "$COMPOSE_FILE" up -d --build postgres ma-server gateway
-    postgres_ready=false
-    for _ in $(seq 1 30); do
-        if docker compose -f "$COMPOSE_FILE" exec -T postgres pg_isready -U veadk -d veadk >/dev/null; then
-            postgres_ready=true
-            break
-        fi
-        sleep 1
-    done
-    if [ "$postgres_ready" != true ]; then
-        echo "Managed Agents PostgreSQL did not become ready" >&2
-        exit 1
-    fi
+    docker compose -f "$COMPOSE_FILE" up -d --build ma-server gateway
     ready=false
     for _ in $(seq 1 30); do
         if curl -fsS "http://127.0.0.1:${MANAGED_AGENTS_GATEWAY_PORT}/health" >/dev/null; then
@@ -52,7 +41,7 @@ up() {
     fi
     echo "Gateway: http://127.0.0.1:${MANAGED_AGENTS_GATEWAY_PORT}"
     echo "Official worker API: http://127.0.0.1:${MA_SERVER_PORT}"
-    echo "PostgreSQL: 127.0.0.1:${POSTGRES_PORT}/veadk"
+    echo "PostgreSQL: configured cloud database"
 }
 
 down() {

@@ -165,7 +165,19 @@ The local stack exposes only loopback ports:
   Work remains cluster-internal and is not exposed by this browser gateway.
 - `127.0.0.1:18081`: localhost-only ma-server official Environment Work endpoint
   used by the three Agent Loop processes.
-- `127.0.0.1:55432`: PostgreSQL used by VeADK's `DatabaseSessionService`.
+
+Both local Compose and VKE use cloud PostgreSQL and no longer deploy a database.
+Set `MA_DATABASE_URL` (`postgresql+psycopg://...`) and
+`VEADK_MANAGED_SESSION_DB_URL` (`postgresql+asyncpg://...`) in `.env` to the same
+cloud database. Running the full backend locally requires network access to
+that database and an allowlisted source address.
+The current `zn_test` endpoint is `postgresba6eaa3d42f0.rds-pg.ivolces.com:5432`;
+the database and application user are `veadk`, with session schema `managed_agents`.
+VKE stores credentials in the `managed-agents-postgres-auth` Secret; passwords
+must not be committed. A local frontend using the VKE gateway through
+`MANAGED_AGENTS_API_TARGET` reuses the VKE backend's database connection.
+See the [RDS migration notes](k8s/RDS_MIGRATION.md) for validation, allowlisting,
+and schema permission troubleshooting.
 
 `ma-server` stores Agent definitions locally and converts an Agent ID into an
 immutable `agent_with_overrides` snapshot when it creates the Task Server
@@ -176,7 +188,7 @@ session. Configure the existing `.env`, then run:
 uv pip install --python .venv/bin/python -e \
   /home/mofanke/github/agent-ma/anthropic-sdk-python
 
-# Start PostgreSQL, ma-server, and Nginx. ma-server Work stays on 127.0.0.1:18081.
+# Start ma-server and Nginx using cloud PostgreSQL. Work stays on 127.0.0.1:18081.
 bash examples/16_self_host_sandbox/local_managed_agents_stack.sh up
 
 # Start three equal workers, create an Agent/Session with the first message,

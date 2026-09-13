@@ -41,24 +41,6 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-agent-loop-to-postgres
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: managed-agents-postgres
-  policyTypes: ["Ingress"]
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: managed-agents-agent-loop
-      ports:
-        - protocol: TCP
-          port: 5432
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
   name: allow-agent-loop-to-ma-server
 spec:
   podSelector:
@@ -70,6 +52,30 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: managed-agents-agent-loop
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: managed-agents-agent-loop-agentkit
       ports:
         - protocol: TCP
           port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-control-plane-to-task-server
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: managed-agents-task-server
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: managed-agents-ma-server
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: managed-agents-gateway
+      ports:
+        - protocol: TCP
+          port: 8787

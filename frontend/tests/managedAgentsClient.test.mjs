@@ -137,11 +137,46 @@ test("streams replay with Last-Event-ID and forwards cancellation", async () => 
     events.push(event);
   }
 
-  assert.equal(request.url, "/v1/sessions/session_1/events/stream?replay=1");
+  assert.equal(request.url, "/v1/sessions/session_1/events/stream?replay=1&include=chunks");
   assert.equal(request.init.headers["Last-Event-ID"], "6");
   assert.equal(request.init.signal, controller.signal);
   assert.equal(opened, true);
   assert.deepEqual(events, [{ type: "session.status_idle", seq: 7 }]);
+});
+
+test("requests transient chunk events for the live UI", async () => {
+  let request;
+  const client = new ManagedAgentsClient({
+    fetch: async (url, init) => {
+      request = { url, init };
+      return new Response('data: {"type":"session.status_idle"}\n\n', {
+        headers: { "content-type": "text/event-stream" },
+      });
+    },
+  });
+
+  for await (const _event of client.streamEvents("session_1", { replay: false })) {
+    // consume the one-event fixture
+  }
+
+  assert.equal(request.url, "/v1/sessions/session_1/events/stream?include=chunks");
+});
+
+test("interrupts a Session with the canonical user.interrupt event", async () => {
+  let request;
+  const client = new ManagedAgentsClient({
+    fetch: async (url, init) => {
+      request = { url, init };
+      return Response.json({ data: [{ type: "user.interrupt" }] });
+    },
+  });
+
+  await client.interruptSession("session_1");
+
+  assert.equal(request.url, "/api/sessions/session_1/events");
+  assert.deepEqual(JSON.parse(request.init.body), {
+    events: [{ type: "user.interrupt" }],
+  });
 });
 
 test("reports non-JSON responses without exposing credential values", async () => {

@@ -13,7 +13,7 @@ spec:
   rules:
     # Keep the IP-derived host as a rollback/debug route while the generated
     # APIG service domain is the official entrypoint.
-    - host: 101.126.74.249.nip.io
+    - host: managed-agents.101.126.74.249.nip.io
       http:
         paths:
           - path: /.well-known/acme-challenge/

@@ -26,9 +26,12 @@ RUN uv pip install --python /app/.venv/bin/python --reinstall --no-deps /tmp/ant
 
 COPY examples/16_self_host_sandbox ./examples/16_self_host_sandbox
 RUN useradd --create-home --uid 10001 veadk \
-    && mkdir -p /workspace /tmp/home \
+    && mkdir -p /workspace /tmp/home /opt/gem \
+    && cp /app/examples/16_self_host_sandbox/run.managed-agents-sandbox.sh /opt/gem/run.sh \
+    && chmod 0755 /opt/gem/run.sh \
     && chown -R veadk:veadk /workspace /tmp/home
 
 USER 10001:10001
+EXPOSE 8080
 
 CMD ["python", "/app/examples/16_self_host_sandbox/main.py", "--managed-agent-worker"]

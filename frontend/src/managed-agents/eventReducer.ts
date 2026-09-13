@@ -23,6 +23,39 @@ export interface ManagedEventState {
   lastEventId?: string;
 }
 
+function normalizePreviewEvent(
+  event: ManagedAgentEvent,
+): ManagedAgentEvent | undefined {
+  if (event.type === "event_start") {
+    const preview = event.event as
+      | { type?: string; id?: string }
+      | undefined;
+    if (preview?.type === "agent.message" && preview.id) {
+      return { type: "agent.message_stream_start", message_id: preview.id };
+    }
+    if (preview?.type === "agent.thinking" && preview.id) {
+      return { type: "agent.thinking_stream_start", thinking_id: preview.id };
+    }
+  }
+  if (event.type === "event_delta" && event.event_id) {
+    const delta = event.delta as
+      | { type?: string; content?: ManagedContentBlock }
+      | undefined;
+    if (
+      delta?.type === "content_delta" &&
+      delta.content?.type === "text" &&
+      typeof delta.content.text === "string"
+    ) {
+      return {
+        type: "agent.message_chunk",
+        message_id: event.event_id,
+        delta: delta.content.text,
+      };
+    }
+  }
+  return event;
+}
+
 export function emptyManagedEventState(
   status: ManagedSessionStatus = "pending",
 ): ManagedEventState {
@@ -98,7 +131,10 @@ export function mergeManagedEvents(
   incoming: readonly ManagedAgentEvent[],
 ): ManagedEventState {
   const byKey = new Map(state.events.map((event) => [eventKey(event), event]));
-  for (const event of incoming) byKey.set(eventKey(event), event);
+  for (const raw of incoming) {
+    const event = normalizePreviewEvent(raw);
+    if (event) byKey.set(eventKey(event), event);
+  }
   const events = orderedEvents([...byKey.values()]);
   let lastSequence = state.lastSequence;
   let lastEventId = state.lastEventId;
@@ -135,10 +171,38 @@ export function managedConversationEntries(
   const messageIndexes = new Map<string, number>();
   const thinkingIndexes = new Map<string, number>();
   const toolIndexes = new Map<string, number>();
+  let turnThinking:
+    | { index: number; streamedText: string; canonicalText: string }
+    | undefined;
+
+  const ensureTurnThinking = (key: string, thinkingId?: string) => {
+    let thinking = thinkingId ? thinkingIndexes.get(thinkingId) : undefined;
+    if (thinking === undefined) thinking = turnThinking?.index;
+    if (thinking === undefined) {
+      thinking = entries.length;
+      entries.push({ key, kind: "thinking", text: "" });
+      turnThinking = { index: thinking, streamedText: "", canonicalText: "" };
+    } else if (turnThinking?.index !== thinking) {
+      turnThinking = { index: thinking, streamedText: "", canonicalText: "" };
+    }
+    if (thinkingId) thinkingIndexes.set(thinkingId, thinking);
+    return turnThinking;
+  };
+
+  const updateThinkingText = () => {
+    if (!turnThinking) return;
+    const entry = entries[turnThinking.index];
+    if (entry?.kind !== "thinking") return;
+    entry.text =
+      turnThinking.canonicalText.length >= turnThinking.streamedText.length
+        ? turnThinking.canonicalText
+        : turnThinking.streamedText;
+  };
 
   for (const event of events) {
     const key = eventKey(event);
     if (event.type === "user.message") {
+      turnThinking = undefined;
       const text = textContent(event.content);
       if (text) entries.push({ key, kind: "message", role: "user", text });
       continue;
@@ -159,6 +223,12 @@ export function managedConversationEntries(
       if (entry?.kind === "message") entry.text += event.delta ?? "";
       continue;
     }
+    if (event.type === "agent.message_stream_end" && event.message_id) {
+      const index = messageIndexes.get(event.message_id);
+      const entry = index === undefined ? undefined : entries[index];
+      if (entry?.kind === "message") entry.streaming = false;
+      continue;
+    }
     if (event.type === "agent.message") {
       const text = textContent(event.content);
       const index = event.message_id ? messageIndexes.get(event.message_id) : undefined;
@@ -168,28 +238,33 @@ export function managedConversationEntries(
       continue;
     }
     if (event.type === "agent.thinking_stream_start" && event.thinking_id) {
-      thinkingIndexes.set(event.thinking_id, entries.length);
-      entries.push({ key, kind: "thinking", text: "", streaming: true });
+      const thinking = ensureTurnThinking(key, event.thinking_id);
+      const entry = entries[thinking.index];
+      if (entry?.kind === "thinking") entry.streaming = true;
       continue;
     }
     if (event.type === "agent.thinking_chunk" && event.thinking_id) {
-      let index = thinkingIndexes.get(event.thinking_id);
-      if (index === undefined) {
-        index = entries.length;
-        thinkingIndexes.set(event.thinking_id, index);
-        entries.push({ key, kind: "thinking", text: "", streaming: true });
-      }
-      const entry = entries[index];
-      if (entry?.kind === "thinking") entry.text += event.delta ?? "";
+      const thinking = ensureTurnThinking(key, event.thinking_id);
+      thinking.streamedText += event.delta ?? "";
+      const entry = entries[thinking.index];
+      if (entry?.kind === "thinking") entry.streaming = true;
+      updateThinkingText();
+      continue;
+    }
+    if (event.type === "agent.thinking_stream_end" && event.thinking_id) {
+      const index = thinkingIndexes.get(event.thinking_id);
+      const entry = index === undefined ? undefined : entries[index];
+      if (entry?.kind === "thinking") entry.streaming = false;
       continue;
     }
     if (event.type === "agent.thinking") {
       const text = event.text ?? textContent(event.content);
       if (!text) continue;
-      const index = event.thinking_id ? thinkingIndexes.get(event.thinking_id) : undefined;
-      const entry = { key, kind: "thinking", text } as const;
-      if (index === undefined) entries.push(entry);
-      else entries[index] = entry;
+      const thinking = ensureTurnThinking(key, event.thinking_id);
+      thinking.canonicalText += text;
+      const entry = entries[thinking.index];
+      if (entry?.kind === "thinking") entry.streaming = false;
+      updateThinkingText();
       continue;
     }
     if (event.type === "agent.tool_use") {

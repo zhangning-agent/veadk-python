@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef } from "react";
 
 import { isImeCompositionEvent } from "./composerKeyboard";
-import { ComposerSendIcon } from "./icons/ComposerIcons";
+import { ComposerSendIcon, ComposerStopIcon } from "./icons/ComposerIcons";
 
 export interface CompactComposerProps {
   value: string;
@@ -10,6 +10,7 @@ export interface CompactComposerProps {
   disabled?: boolean;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  onStop?: () => void;
 }
 
 /**
@@ -24,6 +25,7 @@ export function CompactComposer({
   disabled = false,
   onChange,
   onSubmit,
+  onStop,
 }: CompactComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const canSend = Boolean(value.trim()) && !busy && !disabled;
@@ -65,12 +67,17 @@ export function CompactComposer({
         </div>
         <div className="composer-submit-actions">
           <button
-            type="submit"
+            type={busy && onStop ? "button" : "submit"}
             className="comp-send"
-            disabled={!canSend}
-            aria-label={busy ? "正在生成" : "发送"}
+            disabled={disabled || (busy ? !onStop : !canSend)}
+            aria-label={busy && onStop ? "停止生成" : busy ? "正在生成" : "发送"}
+            onClick={busy && onStop ? onStop : undefined}
           >
-            <ComposerSendIcon className="icon" />
+            {busy && onStop ? (
+              <ComposerStopIcon className="icon" />
+            ) : (
+              <ComposerSendIcon className="icon" />
+            )}
           </button>
         </div>
       </div>

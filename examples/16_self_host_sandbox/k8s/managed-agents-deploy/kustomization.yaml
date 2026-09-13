@@ -1,11 +1,22 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
+  - agent-loop-agentkit.yaml
   - ../managed-agents
 images:
   - name: zn-datapath-cn-beijing.cr.volces.com/sandbox/veadk-managed-agents-gateway
-    newTag: 20260906-skills-03
+    newTag: 20260912-thinking-block-01
   - name: zn-datapath-cn-beijing.cr.volces.com/sandbox/ma-server
-    newTag: 20260906-agentkit-only-skills-01
+    newTag: 20260912-stream-lifecycle-05
   - name: zn-datapath-cn-beijing.cr.volces.com/sandbox/veadk-managed-agents-worker
-    newTag: 20260906-scoped-skills-02
+    newTag: 20260912-python-event-cursor-02
+  - name: zn-datapath-cn-beijing.cr.volces.com/sandbox/oma-task-server
+    newTag: 20260912-lease-pagination-01
+patches:
+  - target:
+      kind: Deployment
+      name: managed-agents-agent-loop
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0

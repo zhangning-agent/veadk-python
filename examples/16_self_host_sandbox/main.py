@@ -36,7 +36,7 @@ from agents.self_host_sandbox_agent.agent import (
 )
 from google.adk.tools.base_tool import BaseTool
 from google.genai import types
-from managed_agent_loop import ManagedAgentsLoop
+from managed_agent_loop import ManagedAgentEventState, ManagedAgentsLoop
 from managed_session_resources import mcp_toolsets, skill_instructions
 from sandbox_client import SelfHostSandboxClient
 
@@ -222,7 +222,7 @@ async def _wait_for_session_event(
     sdk: Any,
     session_id: str,
     *,
-    event_type: str,
+    event_type: str | tuple[str, ...],
     link_field: str,
     link_id: str,
 ) -> Any:
@@ -234,7 +234,8 @@ async def _wait_for_session_event(
             session_id, limit=1000, order="desc"
         ):
             if (
-                _field(event, "type") == event_type
+                _field(event, "type")
+                in ((event_type,) if isinstance(event_type, str) else event_type)
                 and _field(event, link_field) == link_id
             ):
                 return event
@@ -501,7 +502,7 @@ def _confined_tool_arguments(
 def managed_work_tool_runtime(
     sdk: Any, session_id: str, *, workdir: Path, snapshot: Any | None = None
 ) -> RuntimeProvider:
-    """Execute tools inside this worker and persist canonical tool events."""
+    """Execute tools locally or await the configured remote sandbox worker."""
 
     policies = _tool_permission_map(snapshot) if snapshot is not None else {}
     local_runtime = LocalRuntimeProvider()
@@ -619,6 +620,19 @@ def managed_work_tool_runtime(
             return {"error": "tool call denied by user"}
         if event["evaluated_permission"] != "ask":
             await sdk.beta.sessions.events.send(session_id, events=[event])
+        if os.getenv("MANAGED_AGENT_TOOL_EXECUTION", "local") == "remote":
+            result_event = await _wait_for_session_event(
+                sdk,
+                session_id,
+                event_type=("user.tool_result", "agent.tool_result"),
+                link_field="tool_use_id",
+                link_id=tool_use_id,
+            )
+            content = _event_content_text(_field(result_event, "content"))
+            is_error = bool(_field(result_event, "is_error", False))
+            if _field(result_event, "type") == "user.tool_result":
+                await publish_result("tool", tool_use_id, content, is_error)
+            return {"error" if is_error else "result": content}
         try:
             if tool_call.name in _MANAGED_TOOLS:
                 result = await _run_managed_tool(
@@ -706,6 +720,28 @@ async def serve_managed_agent_worker(
         os.getenv("MANAGED_AGENT_READY_FILE", "/tmp/managed-agent-worker-ready")
     )
     ready_file.unlink(missing_ok=True)
+    event_states: dict[str, ManagedAgentEventState] = {}
+    max_event_states = int(os.getenv("MANAGED_AGENT_EVENT_STATE_CACHE_SIZE", "4096"))
+    if max_event_states < 1:
+        raise ValueError("MANAGED_AGENT_EVENT_STATE_CACHE_SIZE must be positive")
+
+    def event_state_for(session_id: str) -> ManagedAgentEventState:
+        state = event_states.get(session_id)
+        if state is not None:
+            # Dict insertion order provides a small LRU without another cache
+            # dependency. Moving the key never changes the shared state object.
+            event_states.pop(session_id)
+            event_states[session_id] = state
+            return state
+
+        if len(event_states) >= max_event_states:
+            for cached_session_id, cached_state in tuple(event_states.items()):
+                if not cached_state.lock.locked():
+                    event_states.pop(cached_session_id)
+                    break
+        state = ManagedAgentEventState()
+        event_states[session_id] = state
+        return state
 
     try:
         async with session_client.create_async_client() as sdk:
@@ -765,6 +801,7 @@ async def serve_managed_agent_worker(
                         await ManagedAgentsLoop(
                             runner=runner,
                             session_id=session_id,
+                            event_state=event_state_for(session_id),
                         ).run_pending(scoped_sdk, max_turns=1)
                     finally:
                         await close_managed_runner(runner)
@@ -792,9 +829,72 @@ async def serve_managed_agent_worker(
                 f"environment_id={session_client.environment_id}",
                 flush=True,
             )
-            return await dispatcher.run(max_items=max_work_items)
+            concurrency = int(os.getenv("MANAGED_AGENT_WORK_CONCURRENCY", "1"))
+            if concurrency < 1:
+                raise ValueError("MANAGED_AGENT_WORK_CONCURRENCY must be positive")
+            return await dispatcher.run(
+                max_items=max_work_items, max_concurrency=concurrency
+            )
     finally:
         ready_file.unlink(missing_ok=True)
+
+
+async def serve_claimed_managed_agent_work() -> int:
+    """Serve a claimed session until the external dispatcher reclaims the sandbox."""
+    session_client = SelfHostSandboxClient()
+    work_id = os.getenv("MA_WORK_ID") or os.getenv("ANTHROPIC_WORK_ID")
+    session_id = os.getenv("MA_SESSION_ID") or os.getenv("ANTHROPIC_SESSION_ID")
+    if not work_id or not session_id:
+        raise ValueError(
+            "MA_WORK_ID/ANTHROPIC_WORK_ID and MA_SESSION_ID/ANTHROPIC_SESSION_ID "
+            "are required for claimed Work mode"
+        )
+
+    root = Path(os.getenv("MANAGED_AGENT_WORKDIR", "/workspace")).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    short_term_memory = managed_short_term_memory()
+    async with session_client.create_async_client() as sdk:
+        session = await sdk.beta.sessions.retrieve(session_id)
+        from managed_session_resources import (
+            cleanup_session_skills,
+            materialize_session_skills,
+            session_workdir,
+        )
+
+        item_workdir = session_workdir(root, session_id)
+        downloaded_skills = await materialize_session_skills(
+            session, item_workdir, client=sdk
+        )
+        tool_runtime = managed_work_tool_runtime(
+            sdk, session_id, workdir=item_workdir, snapshot=session.agent
+        )
+        runner = managed_runner(
+            short_term_memory,
+            session.agent,
+            before_tool_callback=tool_runtime.before_tool_callback,
+            sdk=sdk,
+            session_id=session_id,
+            skill_dirs=downloaded_skills,
+        )
+        try:
+            turns = await ManagedAgentsLoop(
+                runner=runner, session_id=session_id
+            ).run_claimed(
+                sdk,
+                environment_id=session_client.environment_id,
+                work_id=work_id,
+                last_heartbeat=os.getenv("MA_LATEST_HEARTBEAT_AT") or "NO_HEARTBEAT",
+            )
+        finally:
+            await close_managed_runner(runner)
+            await cleanup_session_skills(downloaded_skills)
+
+        print(
+            f"MANAGED_AGENT_CLAIMED_WORK_COMPLETE work_id={work_id} "
+            f"session_id={session_id} turns={turns}",
+            flush=True,
+        )
+        return turns
 
 
 async def serve_feishu_channel(stop_event: asyncio.Event | None = None) -> None:
@@ -853,6 +953,11 @@ async def main() -> None:
         action="store_true",
         help="Continuously poll and execute Managed Agent session work.",
     )
+    parser.add_argument(
+        "--managed-agent-work-item",
+        action="store_true",
+        help="Execute one WorkItem already claimed by an external dispatcher.",
+    )
     parser.add_argument("--worker-id", default=None)
     parser.add_argument("--max-work-items", type=int, default=None)
     parser.add_argument(
@@ -889,6 +994,11 @@ async def main() -> None:
             readiness_probe=args.managed_agent_readiness_probe,
         )
         print(f"Managed Agents worker completed {count} work item(s).")
+        return
+
+    if args.managed_agent_work_item:
+        turns = await serve_claimed_managed_agent_work()
+        print(f"Managed Agents claimed Work completed {turns} turn(s).")
         return
 
     if args.feishu:

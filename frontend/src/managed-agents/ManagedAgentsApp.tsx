@@ -159,6 +159,7 @@ export function ManagedAgentsApp({ config }: ManagedAgentsAppProps) {
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [interrupting, setInterrupting] = useState(false);
   const [turnPending, setTurnPending] = useState(false);
   const [sendError, setSendError] = useState("");
   const [eventState, setEventState] = useState<ManagedEventState>(emptyManagedEventState());
@@ -415,6 +416,19 @@ export function ManagedAgentsApp({ config }: ManagedAgentsAppProps) {
     }
   }
 
+  async function interruptTurn() {
+    if (!selectedSessionId || !turnBusy || interrupting) return;
+    setInterrupting(true);
+    setSendError("");
+    try {
+      await runOperation((signal) => client.interruptSession(selectedSessionId, signal));
+    } catch (error) {
+      if (!isAbort(error)) setSendError(messageFor(error, "停止执行失败"));
+    } finally {
+      setInterrupting(false);
+    }
+  }
+
   const items = resource === "agents" ? agents : resource === "environments" ? environments : sessions;
   const resourceTitle = resource === "agents" ? "Agents" : resource === "environments" ? "Environments" : "Sessions";
   const createLabel = resource === "agents" ? "新建 Agent" : resource === "environments" ? "新建 Environment" : "新建 Session";
@@ -487,7 +501,7 @@ export function ManagedAgentsApp({ config }: ManagedAgentsAppProps) {
                 return <p className="managed-error" role="alert" key={entry.key}>{entry.text}</p>;
               })}
             </div>
-            <div className="managed-composer">{sendError ? <p className="managed-error" role="alert">{sendError}</p> : null}<CompactComposer value={input} onChange={setInput} onSubmit={submitMessage} busy={turnBusy} disabled={composerDisabled} placeholder="向 Agent 发送消息…" /></div>
+            <div className="managed-composer">{sendError ? <p className="managed-error" role="alert">{sendError}</p> : null}<CompactComposer value={input} onChange={setInput} onSubmit={submitMessage} onStop={interruptTurn} busy={turnBusy} disabled={composerDisabled || interrupting} placeholder={interrupting ? "正在停止当前执行…" : "向 Agent 发送消息…"} /></div>
           </section>
         ) : <div className="managed-detail-empty">选择一个 Session 开始对话</div>}
       </main>

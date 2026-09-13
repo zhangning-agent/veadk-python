@@ -19,7 +19,9 @@ test("uses the compact IME-aware composer and safe Markdown", () => {
   assert.match(appSource, /<CompactComposer/);
   assert.match(appSource, /<Markdown[\s\S]*?allowRawHtml=\{false\}/);
   assert.match(appSource, /busy=\{turnBusy\}/);
-  assert.match(appSource, /disabled=\{composerDisabled\}/);
+  assert.match(appSource, /disabled=\{composerDisabled \|\| interrupting\}/);
+  assert.match(appSource, /onStop=\{interruptTurn\}/);
+  assert.match(appSource, /client\.interruptSession/);
 });
 
 test("cancels stale transports and falls back to polling", () => {
@@ -63,4 +65,13 @@ test("the workbench exposes Agent Environment and Session resources", () => {
   assert.match(appSource, /environment_id: sessionEnvironmentId/);
   assert.match(appSource, /ENVIRONMENT_ID_OVERRIDE=/);
   assert.match(appSource, /SANDBOX_PROVIDER=docker/);
+});
+
+const layoutSource = readFileSync(
+  new URL("../src/managed-agents/managed-agents.css", import.meta.url), "utf8",
+);
+
+test("optional transport errors cannot move the transcript into the composer row", () => {
+  assert.match(layoutSource, /\.managed-transcript\s*\{[^}]*grid-row:\s*3/);
+  assert.match(layoutSource, /\.managed-composer\s*\{[^}]*grid-row:\s*4/);
 });

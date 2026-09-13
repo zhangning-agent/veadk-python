@@ -49,6 +49,10 @@ spec:
           env:
             - name: AUTH_DISABLED
               value: "1"
+            - name: OMA_TOOL_WORK_TTL_SECONDS
+              value: "300"
+            - name: OMA_TRUST_EXTERNAL_SNAPSHOTS
+              value: "1"
             - name: ANTHROPIC_ENVIRONMENT_KEY
               valueFrom:
                 secretKeyRef:

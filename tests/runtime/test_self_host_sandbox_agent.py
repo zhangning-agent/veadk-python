@@ -20,6 +20,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 EXAMPLE_DIR = Path(__file__).parents[2] / "examples" / "16_self_host_sandbox"
 if str(EXAMPLE_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLE_DIR))
@@ -283,6 +285,41 @@ def test_managed_agent_config_loads_skill_instructions_and_custom_tool(tmp_path)
     )
     assert "Return the marker." in config["instruction"]
     assert [tool.name for tool in config["tools"]] == ["approve"]
+
+
+@pytest.mark.parametrize("result_type", ["user.tool_result", "agent.tool_result"])
+def test_managed_worker_remote_tool_waits_for_matching_result(monkeypatch, result_type):
+    monkeypatch.setenv("MANAGED_AGENT_TOOL_EXECUTION", "remote")
+    batches = []
+
+    async def send(session_id, *, events):
+        batches.extend(events)
+
+    async def list_events(session_id, **kwargs):
+        yield {"type": "user.tool_result", "tool_use_id": "other", "content": "wrong"}
+        yield {"type": result_type, "tool_use_id": "tool-1", "content": "remote-ok", "is_error": False}
+
+    async def forbidden_local(*args, **kwargs):
+        raise AssertionError("remote tools must not execute inside Agent Loop")
+
+    monkeypatch.setattr(main_module, "_run_managed_tool", forbidden_local)
+    sdk = SimpleNamespace(beta=SimpleNamespace(sessions=SimpleNamespace(
+        events=SimpleNamespace(send=send, list=list_events)
+    )))
+    runtime = main_module.managed_work_tool_runtime(
+        sdk, "session-1", workdir=Path("/tmp/managed-work")
+    )
+    result = asyncio.run(runtime.execute(SimpleNamespace(
+        id="tool-1", name="bash", arguments={"command": "printf remote-ok"},
+        tool=SimpleNamespace(),
+    )))
+    assert result == {"result": "remote-ok"}
+    expected = ["agent.tool_use"]
+    if result_type == "user.tool_result":
+        expected.append("agent.tool_result")
+        assert batches[-1]["tool_use_id"] == "tool-1"
+        assert batches[-1]["content"] == "remote-ok"
+    assert [event["type"] for event in batches] == expected
 
 
 def test_managed_worker_executes_tool_locally_and_publishes_events(monkeypatch):

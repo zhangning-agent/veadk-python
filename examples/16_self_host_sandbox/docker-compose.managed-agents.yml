@@ -1,24 +1,9 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: veadk
-      POSTGRES_PASSWORD: veadk
-      POSTGRES_DB: veadk
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U veadk -d veadk"]
-      interval: 1s
-      timeout: 3s
-      retries: 30
-    volumes:
-      - managed_agents_postgres:/var/lib/postgresql/data
-
   ma-server:
     build:
       context: ../../../agent-ma/ma-server
     environment:
+      MA_DATABASE_URL: ${MA_DATABASE_URL:?set MA_DATABASE_URL to the cloud PostgreSQL database}
       TASK_SERVER_BASE_URL: ${TASK_SERVER_BASE_URL:?set TASK_SERVER_BASE_URL}
       TASK_SERVER_API_KEY: ${TASK_SERVER_API_KEY:?set TASK_SERVER_API_KEY}
       TASK_SERVER_ACCOUNT_ID: ${TASK_SERVER_ACCOUNT_ID:-}
@@ -31,7 +16,7 @@ services:
       ENVIRONMENT_WORK_STORE_PATH: /data/environment-work.sqlite3
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,ma-server,postgres}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,ma-server}
     healthcheck:
       test:
         - CMD
@@ -65,5 +50,4 @@ services:
       - "task-server:host-gateway"
 
 volumes:
-  managed_agents_postgres:
   managed_agents_agents:

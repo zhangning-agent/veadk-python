@@ -3,21 +3,19 @@ kind: ConfigMap
 metadata:
   name: managed-agents-config
 data:
-  TASK_SERVER_BASE_URL: https://replace-me.invalid
-  ANTHROPIC_BASE_URL: https://replace-me.invalid
+  TASK_SERVER_BASE_URL: http://task-server:8787
+  ANTHROPIC_BASE_URL: http://ma-server:8000
   # Override this in managed-agents-worker-config when selecting an existing
   # local Environment for the three Agent Loop replicas.
   ANTHROPIC_ENVIRONMENT_ID: env_replace_me
   APP_AGENT_STORE_PATH: /data/agents.json
   APP_ENVIRONMENT_STORE_PATH: /data/environments.json
-  APP_SESSION_STORE_PATH: /data/sessions.json
   PROVISIONING_STORE_PATH: /data/environment-provisionings.sqlite3
-  ENVIRONMENT_WORK_STORE_PATH: /data/environment-work.sqlite3
   AGENTKIT_PROJECT_NAME: default
   AGENTKIT_SKILL_SPACE_IDS: ""
   AGENTKIT_SKILL_POLL_INTERVAL_SECONDS: "2"
   AGENTKIT_SKILL_TIMEOUT_SECONDS: "300"
-  DATABASE_POSTGRESQL_HOST: managed-agents-postgres
+  DATABASE_POSTGRESQL_HOST: postgresba6eaa3d42f0.rds-pg.ivolces.com
   DATABASE_POSTGRESQL_PORT: "5432"
   DATABASE_POSTGRESQL_USER: veadk
   DATABASE_POSTGRESQL_DATABASE: veadk
