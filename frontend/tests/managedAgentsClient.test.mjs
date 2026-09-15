@@ -76,26 +76,39 @@ test("creates a cloud Session with the selected local environment id", async () 
   });
 });
 
-test("creates and lists local Environments through the control prefix", async () => {
+test("creates Cloud and Self-hosted Environments through the control prefix", async () => {
   const requests = [];
   const client = new ManagedAgentsClient({
     fetch: async (url, init = {}) => {
       requests.push({ url, init });
       if (init.method === "POST") return Response.json({
-        id: "env_local",
+        id: "env_created",
         type: "environment",
-        name: "Docker",
-        status: "ready",
-        config: { type: "selfhostsandbox", provider: "docker" },
+        name: "Managed Sandbox",
+        config: JSON.parse(init.body).config,
       }, { status: 201 });
       return Response.json({ data: [] });
     },
   });
 
   await client.listEnvironments();
-  await client.createEnvironment({ name: "Docker", provider: "docker" });
+  await client.createEnvironment({ name: "Cloud", config: { type: "cloud" } });
+  await client.createEnvironment({
+    name: "Self hosted",
+    description: "My worker pool",
+    config: { type: "self_hosted" },
+  });
   assert.equal(requests[0].url, "/api/environments?limit=100");
   assert.equal(requests[1].url, "/api/environments");
+  assert.deepEqual(JSON.parse(requests[1].init.body), {
+    name: "Cloud",
+    config: { type: "cloud" },
+  });
+  assert.deepEqual(JSON.parse(requests[2].init.body), {
+    name: "Self hosted",
+    description: "My worker pool",
+    config: { type: "self_hosted" },
+  });
 });
 
 test("sends user.message to an encoded Session path and accepts an empty 202", async () => {

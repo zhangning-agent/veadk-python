@@ -65,6 +65,13 @@ test("the workbench exposes Agent Environment and Session resources", () => {
   assert.match(appSource, /environment_id: sessionEnvironmentId/);
   assert.match(appSource, /ENVIRONMENT_ID_OVERRIDE=/);
   assert.match(appSource, /SANDBOX_PROVIDER=docker/);
+  assert.match(appSource, /<option value="cloud">Cloud Sandbox<\/option>/);
+  assert.match(appSource, /<option value="self_hosted">Self-hosted Sandbox<\/option>/);
+  assert.match(appSource, /config: { type: environmentType }/);
+  assert.doesNotMatch(appSource, /value="本地 Docker"/);
+  assert.match(appSource, /Cloud Sandbox 由平台托管，无需启动本地 Dispatcher/);
+  assert.match(appSource, /托管资源 · 云端会话/);
+  assert.doesNotMatch(appSource, /本地持久化资源/);
 });
 
 const layoutSource = readFileSync(

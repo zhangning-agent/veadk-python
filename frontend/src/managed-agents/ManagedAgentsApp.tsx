@@ -29,6 +29,7 @@ import {
 type ResourceKind = "agents" | "environments" | "sessions";
 type TransportState = "connecting" | "live" | "polling" | "failed" | "cancelled";
 type ModalKind = ResourceKind | null;
+type EnvironmentKind = "cloud" | "self_hosted";
 
 const SSE_RETRY_DELAYS_MS = [500, 1_000, 2_000] as const;
 
@@ -78,6 +79,16 @@ function displayDate(value?: string): string {
   if (!value) return "—";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function environmentKind(environment: ManagedEnvironment): EnvironmentKind {
+  return environment.config.type === "cloud" ? "cloud" : "self_hosted";
+}
+
+function environmentKindLabel(environment: ManagedEnvironment): string {
+  return environmentKind(environment) === "cloud"
+    ? "Cloud Sandbox"
+    : "Self-hosted Sandbox";
 }
 
 async function listAllEvents(
@@ -153,6 +164,7 @@ export function ManagedAgentsApp({ config }: ManagedAgentsAppProps) {
   const [bashEnabled, setBashEnabled] = useState(true);
   const [environmentName, setEnvironmentName] = useState("");
   const [environmentDescription, setEnvironmentDescription] = useState("");
+  const [environmentType, setEnvironmentType] = useState<EnvironmentKind>("cloud");
   const [sessionAgentId, setSessionAgentId] = useState("");
   const [sessionEnvironmentId, setSessionEnvironmentId] = useState("");
   const [sessionTitle, setSessionTitle] = useState("");
@@ -359,12 +371,12 @@ export function ManagedAgentsApp({ config }: ManagedAgentsAppProps) {
       const environment = await runOperation((signal) => client.createEnvironment({
         name: environmentName.trim(),
         description: environmentDescription.trim() || undefined,
-        provider: "docker",
+        config: { type: environmentType },
       }, signal));
       setEnvironments((items) => [environment, ...items.filter((item) => item.id !== environment.id)]);
       setSelectedEnvironmentId(environment.id);
       setSessionEnvironmentId(environment.id);
-      setEnvironmentName(""); setEnvironmentDescription(""); setModal(null);
+      setEnvironmentName(""); setEnvironmentDescription(""); setEnvironmentType("cloud"); setModal(null);
     } catch (error) { if (!isAbort(error)) setActionError(messageFor(error, "创建 Environment 失败")); }
     finally { setBusy(false); }
   }
@@ -439,13 +451,14 @@ export function ManagedAgentsApp({ config }: ManagedAgentsAppProps) {
     else setSelectedSessionId(id);
   };
   const dispatcherCommand = selectedEnvironment
-    ? `cd /home/mofanke/gitcode/actb-mono/sandboxes/self-host-sandbox\nexport MANAGED_AGENT_API_MODE=oma\nexport MANAGED_AGENT_AUTH_HEADER=authorization\nSANDBOX_PROVIDER=docker ENV_FILE=/home/mofanke/github/veadk-python-zhangning/examples/16_self_host_sandbox/.env ENVIRONMENT_ID_OVERRIDE=${selectedEnvironment.id} IMAGE_VERSION=0.0.7 ./run-local.sh`
+    && environmentKind(selectedEnvironment) === "self_hosted"
+    ? `cd /home/mofanke/gitcode/actb-mono/sandboxes/self-host-sandbox\nexport MANAGED_AGENT_API_MODE=oma\nexport MANAGED_AGENT_AUTH_HEADER=authorization\nSANDBOX_PROVIDER=docker ENV_FILE=/home/mofanke/github/veadk-python-zhangning-agentloop/examples/16_self_host_sandbox/.env ENVIRONMENT_ID_OVERRIDE=${selectedEnvironment.id} IMAGE_VERSION=0.0.7 ./run-local.sh`
     : "";
 
   return (
     <div className="managed-workbench">
       <aside className="managed-nav">
-        <header><h1>{config.title}</h1><p>本地资源 · 云端会话</p></header>
+        <header><h1>{config.title}</h1><p>托管资源 · 云端会话</p></header>
         <nav aria-label="资源导航">
           {(["agents", "environments", "sessions"] as const).map((kind) => (
             <button key={kind} type="button" className={resource === kind ? "is-active" : ""} onClick={() => setResource(kind)}>
@@ -459,7 +472,7 @@ export function ManagedAgentsApp({ config }: ManagedAgentsAppProps) {
 
       <section className="managed-directory" aria-label={resourceTitle + " 列表"}>
         <header className="managed-directory-header">
-          <div><h2>{resourceTitle}</h2><p>{resource === "sessions" ? "云端会话索引" : "本地持久化资源"}</p></div>
+          <div><h2>{resourceTitle}</h2><p>{resource === "sessions" ? "云端会话索引" : "托管资源目录"}</p></div>
           <button type="button" className="managed-primary" onClick={() => { setActionError(""); setModal(resource); }}>{createLabel}</button>
         </header>
         <div className="managed-directory-toolbar">
@@ -475,7 +488,7 @@ export function ManagedAgentsApp({ config }: ManagedAgentsAppProps) {
             const subtitle = resource === "agents"
               ? (item as ManagedAgent).model.id
               : resource === "environments"
-                ? (item as ManagedEnvironment).id
+                ? `${environmentKindLabel(item as ManagedEnvironment)} · ${(item as ManagedEnvironment).id}`
                 : `${(item as ManagedSession).environment_id || "—"} · ${(item as ManagedSession).status}`;
             return <button key={item.id} type="button" role="option" aria-selected={selectedId === item.id} className={selectedId === item.id ? "is-selected" : ""} onClick={() => selectItem(item.id)}>
               <strong>{name}</strong><span>{subtitle}</span><small>{displayDate(item.created_at)}</small>
@@ -488,7 +501,7 @@ export function ManagedAgentsApp({ config }: ManagedAgentsAppProps) {
         {resource === "agents" ? (
           selectedAgent ? <section className="managed-resource-detail"><header><div><p>Agent</p><h2>{selectedAgent.name}</h2></div><span className="managed-status">本地</span></header><dl><div><dt>ID</dt><dd>{selectedAgent.id}</dd></div><div><dt>模型</dt><dd>{selectedAgent.model.id}</dd></div><div><dt>版本</dt><dd>{selectedAgent.version}</dd></div><div><dt>系统提示词</dt><dd>{selectedAgent.system || "—"}</dd></div><div><dt>工具</dt><dd>{selectedAgent.tools?.length ? "Bash 已启用" : "未启用"}</dd></div></dl></section> : <div className="managed-detail-empty">选择一个 Agent 查看详情</div>
         ) : resource === "environments" ? (
-          selectedEnvironment ? <section className="managed-resource-detail"><header><div><p>Environment</p><h2>{selectedEnvironment.name}</h2></div><span className="managed-status">本地 Docker</span></header><dl><div><dt>ID</dt><dd>{selectedEnvironment.id}</dd></div><div><dt>状态</dt><dd>{selectedEnvironment.status}</dd></div><div><dt>说明</dt><dd>{selectedEnvironment.description || "—"}</dd></div></dl><div className="managed-command"><div><h3>启动 Dispatcher</h3><p>在运行 Docker 的开发机上执行。凭据从指定 .env 读取，不显示在页面中。</p></div><pre>{dispatcherCommand}</pre><button type="button" onClick={() => void navigator.clipboard.writeText(dispatcherCommand)}>复制命令</button></div></section> : <div className="managed-detail-empty">选择一个 Environment 查看启动方式</div>
+          selectedEnvironment ? <section className="managed-resource-detail"><header><div><p>Environment</p><h2>{selectedEnvironment.name}</h2></div><span className="managed-status">{environmentKindLabel(selectedEnvironment)}</span></header><dl><div><dt>ID</dt><dd>{selectedEnvironment.id}</dd></div><div><dt>类型</dt><dd>{environmentKindLabel(selectedEnvironment)}</dd></div><div><dt>状态</dt><dd>{selectedEnvironment.status || "已创建"}</dd></div><div><dt>说明</dt><dd>{selectedEnvironment.description || "—"}</dd></div></dl>{dispatcherCommand ? <div className="managed-command"><div><h3>连接 Self-hosted Sandbox</h3><p>在运行 Sandbox Dispatcher 的主机上执行。凭据从指定 .env 读取，不显示在页面中。</p></div><pre>{dispatcherCommand}</pre><button type="button" onClick={() => void navigator.clipboard.writeText(dispatcherCommand)}>复制命令</button></div> : <p className="managed-hint">Cloud Sandbox 由平台托管，无需启动本地 Dispatcher。</p>}</section> : <div className="managed-detail-empty">选择一个 Environment 查看详情</div>
         ) : selectedSession ? (
           <section className="managed-conversation" aria-label="Managed Agents 对话">
             <header className="managed-conversation-header"><div><p>Session</p><h2>{selectedSession.title || "未命名 Session"}</h2><span>{selectedSession.id} · {selectedSession.environment_id} · {statusLabel(eventState.status)}</span></div><div className="managed-transport" aria-live="polite"><i className={"is-" + transport} />{transportLabel(transport)}{transport === "failed" || transport === "cancelled" ? <button type="button" onClick={() => setConnectionAttempt((value) => value + 1)}>重连</button> : null}</div></header>
@@ -507,7 +520,7 @@ export function ManagedAgentsApp({ config }: ManagedAgentsAppProps) {
       </main>
 
       {modal === "agents" ? <Modal title="新建 Agent" onClose={() => !busy && setModal(null)}><form className="managed-form" onSubmit={submitAgent}><label><span>名称</span><input value={agentName} onChange={(event) => setAgentName(event.target.value)} required autoFocus /></label><label><span>模型 ID</span><input value={modelId} onChange={(event) => setModelId(event.target.value)} required /></label><label><span>系统提示词</span><textarea rows={4} value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} /></label><label className="managed-check"><input type="checkbox" checked={bashEnabled} onChange={(event) => setBashEnabled(event.target.checked)} /><span>启用 Bash 工具</span></label>{actionError ? <p className="managed-error" role="alert">{actionError}</p> : null}<footer><button type="button" onClick={() => setModal(null)}>取消</button><button className="managed-primary" disabled={busy || !agentName.trim() || !modelId.trim()}>{busy ? "正在创建…" : "创建 Agent"}</button></footer></form></Modal> : null}
-      {modal === "environments" ? <Modal title="新建 Environment" onClose={() => !busy && setModal(null)}><form className="managed-form" onSubmit={submitEnvironment}><label><span>名称</span><input value={environmentName} onChange={(event) => setEnvironmentName(event.target.value)} required autoFocus /></label><label><span>说明</span><textarea rows={3} value={environmentDescription} onChange={(event) => setEnvironmentDescription(event.target.value)} /></label><label><span>执行方式</span><input value="本地 Docker" disabled /></label>{actionError ? <p className="managed-error" role="alert">{actionError}</p> : null}<footer><button type="button" onClick={() => setModal(null)}>取消</button><button className="managed-primary" disabled={busy || !environmentName.trim()}>{busy ? "正在创建…" : "创建 Environment"}</button></footer></form></Modal> : null}
+      {modal === "environments" ? <Modal title="新建 Environment" onClose={() => !busy && setModal(null)}><form className="managed-form" onSubmit={submitEnvironment}><label><span>名称</span><input value={environmentName} onChange={(event) => setEnvironmentName(event.target.value)} required autoFocus /></label><label><span>说明</span><textarea rows={3} value={environmentDescription} onChange={(event) => setEnvironmentDescription(event.target.value)} /></label><label><span>Sandbox 类型</span><select value={environmentType} onChange={(event) => setEnvironmentType(event.target.value as EnvironmentKind)}><option value="cloud">Cloud Sandbox</option><option value="self_hosted">Self-hosted Sandbox</option></select></label><p className="managed-hint">{environmentType === "cloud" ? "由平台托管 Sandbox，创建后可直接用于 Session。" : "创建逻辑环境后，需要启动自己的 Sandbox Dispatcher 来接收任务。"}</p>{actionError ? <p className="managed-error" role="alert">{actionError}</p> : null}<footer><button type="button" onClick={() => setModal(null)}>取消</button><button className="managed-primary" disabled={busy || !environmentName.trim()}>{busy ? "正在创建…" : "创建 Environment"}</button></footer></form></Modal> : null}
       {modal === "sessions" ? <Modal title="新建 Session" onClose={() => !busy && setModal(null)}><form className="managed-form" onSubmit={submitSession}><label><span>Agent</span><select value={sessionAgentId} onChange={(event) => setSessionAgentId(event.target.value)} required><option value="">请选择 Agent</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label><label><span>Environment</span><select value={sessionEnvironmentId} onChange={(event) => setSessionEnvironmentId(event.target.value)} required><option value="">请选择 Environment</option>{environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}</select></label><label><span>标题</span><input value={sessionTitle} onChange={(event) => setSessionTitle(event.target.value)} placeholder="可选" /></label>{agents.length === 0 || environments.length === 0 ? <p className="managed-hint">创建 Session 前需要至少一个 Agent 和一个 Environment。</p> : null}{actionError ? <p className="managed-error" role="alert">{actionError}</p> : null}<footer><button type="button" onClick={() => setModal(null)}>取消</button><button className="managed-primary" disabled={busy || !sessionAgentId || !sessionEnvironmentId}>{busy ? "正在创建…" : "创建 Session"}</button></footer></form></Modal> : null}
     </div>
   );

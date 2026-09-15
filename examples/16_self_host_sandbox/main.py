@@ -769,7 +769,7 @@ async def serve_managed_agent_worker(
                 try:
                     await scoped_sdk.beta.environments.work.update(
                         work_item.id,
-                        environment_id=session_client.environment_id,
+                        environment_id=work_item.environment_id,
                         metadata={"managed_agent_worker_id": resolved_worker_id},
                     )
                     session = await scoped_sdk.beta.sessions.retrieve(session_id)
@@ -815,8 +815,12 @@ async def serve_managed_agent_worker(
                     )
                     raise
 
-            dispatcher = sdk.beta.environments.work.dispatcher(
+            from anthropic.lib.environments._dispatcher import EnvironmentWorkDispatcher
+
+            dispatcher = EnvironmentWorkDispatcher(
+                sdk,
                 handler=handle,
+                account_work=os.getenv("MANAGED_AGENT_WORK_SCOPE", "environment") == "account",
                 environment_id=session_client.environment_id,
                 environment_key=session_client.bearer_token,
                 worker_id=resolved_worker_id,
@@ -832,9 +836,22 @@ async def serve_managed_agent_worker(
             concurrency = int(os.getenv("MANAGED_AGENT_WORK_CONCURRENCY", "1"))
             if concurrency < 1:
                 raise ValueError("MANAGED_AGENT_WORK_CONCURRENCY must be positive")
-            return await dispatcher.run(
-                max_items=max_work_items, max_concurrency=concurrency
-            )
+            loop = asyncio.get_running_loop()
+
+            def drain_worker() -> None:
+                ready_file.unlink(missing_ok=True)
+                dispatcher.drain()
+                print(f"MANAGED_AGENT_WORKER_DRAIN worker_id={resolved_worker_id}", flush=True)
+
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(signum, drain_worker)
+            try:
+                return await dispatcher.run(
+                    max_items=max_work_items, max_concurrency=concurrency
+                )
+            finally:
+                for signum in (signal.SIGINT, signal.SIGTERM):
+                    loop.remove_signal_handler(signum)
     finally:
         ready_file.unlink(missing_ok=True)
 

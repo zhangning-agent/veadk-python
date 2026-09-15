@@ -26,11 +26,11 @@ export interface ManagedEnvironment {
   type: "environment";
   name: string;
   description?: string | null;
-  status: string;
-  config: {
-    type: "selfhostsandbox";
-    provider: "docker";
-  };
+  status?: string;
+  config:
+    | { type: "cloud"; [key: string]: unknown }
+    | { type: "self_hosted"; [key: string]: unknown }
+    | { type: "selfhostsandbox"; provider?: "docker"; [key: string]: unknown };
   metadata?: Record<string, unknown>;
   created_at?: string;
   updated_at?: string;
@@ -119,7 +119,7 @@ export interface CreateManagedSessionInput {
 export interface CreateManagedEnvironmentInput {
   name: string;
   description?: string;
-  provider?: "docker";
+  config: { type: "cloud" | "self_hosted" };
 }
 
 export interface ManagedAgentsClientOptions {
