@@ -62,6 +62,31 @@ class _FakeClient:
         self.idle_count += 1
 
 
+def test_feishu_topic_transition_preserves_managed_session(monkeypatch):
+    from veadk.extensions import FeishuChannelExtension
+
+    manager = SandboxSessionManager()
+    client = _FakeClient("remote-original")
+    monkeypatch.setattr(manager, "_new_client", lambda: client)
+    channel = SimpleNamespace(on=lambda *args: None)
+    extension = FeishuChannelExtension(
+        runner=SimpleNamespace(), channel=channel, create_topic=True
+    )
+    first = SimpleNamespace(chat_id="chat", message_id="root")
+    first_id = extension.get_active_session_id(first)
+    remote = manager.create_remote_session(first_id)
+    extension._topic_origins[("chat", "root")] = first_id
+    manager.begin_turn(first_id)
+    manager.end_turn(first_id)
+    reply = SimpleNamespace(
+        chat_id="chat", thread_id="topic", raw={"message": {"root_id": "root"}}
+    )
+    second_id = extension.get_active_session_id(reply)
+    assert manager.create_remote_session(second_id) == remote
+    assert manager.get(second_id) is manager.get(first_id)
+    assert len(client.created_titles) == 1
+
+
 def test_each_veadk_session_creates_a_distinct_remote_session(monkeypatch):
     manager = SandboxSessionManager()
     clients = iter((_FakeClient("remote-1"), _FakeClient("remote-2")))

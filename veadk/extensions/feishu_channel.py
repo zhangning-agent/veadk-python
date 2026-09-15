@@ -134,7 +134,11 @@ def _read_attr(obj: Any, *path: str) -> Any:
     for key in path:
         if current is None:
             return None
-        current = getattr(current, key, None)
+        current = (
+            current.get(key)
+            if isinstance(current, dict)
+            else getattr(current, key, None)
+        )
     return current
 
 
@@ -408,6 +412,10 @@ class FeishuChannelExtension:
         self.enable_session_commands = enable_session_commands
         self.on_new_session = on_new_session
         self._active_sessions: dict[str, str] = {}
+        # Remember the session that handled each topic's originating message.
+        # Keys include chat_id so unrelated conversations cannot inherit it.
+        self._topic_origins: dict[tuple[str, str], str] = {}
+        self._topic_sessions: dict[tuple[str, str], str] = {}
         self._reset_boundaries: dict[str, int | None] = {}
         self._sessions_lock = threading.Lock()
         self.reactions = (
@@ -501,10 +509,32 @@ class FeishuChannelExtension:
     def get_active_session_id(self, message: Any) -> str:
         """Resolve the effective session_id for a message, honoring active resets."""
         base_id = self.session_id_factory(message)
-        if not self.enable_session_commands:
-            return base_id
         with self._sessions_lock:
-            return self._active_sessions.get(base_id, base_id)
+            if self.enable_session_commands and base_id in self._active_sessions:
+                return self._active_sessions[base_id]
+            chat_id = _coalesce(
+                getattr(message, "chat_id", None),
+                _read_attr(message, "conversation", "chat_id"),
+            )
+            thread_id = _coalesce(
+                _read_attr(message, "conversation", "thread_id"),
+                getattr(message, "thread_id", None),
+            )
+            if self.create_topic and thread_id:
+                topic_key = (chat_id, base_id)
+                if topic_key not in self._topic_sessions:
+                    root_id = _coalesce(
+                        getattr(message, "root_id", None),
+                        _read_attr(message, "raw", "event", "message", "root_id"),
+                        _read_attr(message, "raw", "message", "root_id"),
+                        _read_attr(message, "raw", "root_id"),
+                        getattr(message, "reply_to_message_id", None),
+                    )
+                    inherited = self._topic_origins.get((chat_id, root_id))
+                    if inherited:
+                        self._topic_sessions[topic_key] = inherited
+                return self._topic_sessions.get(topic_key, base_id)
+            return base_id
 
     @staticmethod
     def default_user_id_factory(message: Any) -> str:
@@ -726,7 +756,8 @@ class FeishuChannelExtension:
             first_token = text.split()[0].lower()
             if first_token in SESSION_RESET_COMMANDS:
                 base_scope = self.session_id_factory(message)
-                old_id, new_id = self.reset_session(
+                old_id = self.get_active_session_id(message)
+                _, new_id = self.reset_session(
                     base_scope, create_time=self._message_create_time(message)
                 )
                 logger.info(
@@ -767,6 +798,14 @@ class FeishuChannelExtension:
         composed_text = f"{prefix}\n\n{text}".strip() if prefix else text
 
         context = self.build_message_context(message=message, text=composed_text)
+
+        if self.create_topic and self.reply_in_thread and context.message_id:
+            # Register before streaming: a user may reply while cards are still
+            # being generated. The reply event carries the original root_id.
+            with self._sessions_lock:
+                self._topic_origins[(context.chat_id, context.message_id)] = (
+                    context.session_id
+                )
 
         if self.reactions and context.message_id:
             try:

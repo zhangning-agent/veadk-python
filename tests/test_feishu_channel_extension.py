@@ -44,6 +44,36 @@ class FakeChannel:
         self.sent_messages.append((chat_id, body, options))
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_created_topic_inherits_original_session(streaming):
+    runner = FakeStreamingRunner() if streaming else FakeRunner()
+    channel = FakeStreamChannel() if streaming else FakeChannel()
+    extension = FeishuChannelExtension(
+        runner=runner, channel=channel, create_topic=True, streaming=streaming
+    )
+    await extension._on_message(build_message())
+    reply = build_message(
+        message_id="om_followup", thread_id="omt_created",
+        raw={"message": {"root_id": "om_001"}},
+    )
+    assert extension.get_active_session_id(reply) == "oc_chat"
+    # Subsequent replies need not carry the original root again.
+    assert extension.get_active_session_id(
+        build_message(message_id="om_later", thread_id="omt_created")
+    ) == "oc_chat"
+    assert extension.get_active_session_id(
+        build_message(thread_id="omt_other", raw={"root_id": "om_unseen"})
+    ) == "omt_other"
+    assert extension.get_active_session_id(
+        build_message(chat_id="oc_other", thread_id="omt_created",
+                      raw={"root_id": "om_001"})
+    ) == "omt_created"
+    # Explicit reset still starts a fresh session within the inherited topic.
+    _, new_id = extension.reset_session("omt_created")
+    assert extension.get_active_session_id(reply) == new_id
+
+
 class FakeStreamController:
     def __init__(self):
         self.chunks = []
